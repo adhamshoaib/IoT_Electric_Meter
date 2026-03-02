@@ -11,8 +11,8 @@
 
 #include <string.h>
 
-#define WIFI_UERNAME "ashoaib"
-#define WIFI_PASSWORD "adham2205"
+#define WIFI_UERNAME "Zeyad iPhone"
+#define WIFI_PASSWORD "11111111"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define MAX_RETRY          10

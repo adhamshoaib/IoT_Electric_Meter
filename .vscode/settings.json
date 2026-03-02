@@ -1,0 +1,5 @@
+{
+    "cmake.sourceDirectory": "D:/IoT_Electric_Meter/ESP32-firmware",
+    "idf.currentSetup": "C:\\esp",
+    "idf.portWin": "COM5"
+}
