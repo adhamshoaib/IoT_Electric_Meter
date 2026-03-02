@@ -11,6 +11,9 @@
 
 #include <string.h>
 
+#define WIFI_UERNAME "ashoaib"
+#define WIFI_PASSWORD "adham2205"
+
 #define WIFI_CONNECTED_BIT BIT0
 #define MAX_RETRY          10
 
@@ -64,8 +67,8 @@ void wifi_init(void)
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = "Zeyad iPhone",
-            .password = "11111111",
+            .ssid = WIFI_UERNAME,
+            .password = WIFI_PASSWORD,
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
