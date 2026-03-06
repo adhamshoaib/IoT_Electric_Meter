@@ -24,14 +24,15 @@ static const wifi_network_t wifi_list[] = {
     { "zeyad iphone", "11111111"  },
     { "adham"       ,  "adham@9876"}
 };
+
 #define WIFI_LIST_SIZE (sizeof(wifi_list) / sizeof(wifi_list[0]))
 
 static const char *TAG = "WIFI";
 
 static EventGroupHandle_t  s_wifi_event_group;
 
-static int                 s_retry_count    = 0;
-static int                 s_network_index  = 0;   // which SSID we're currently trying
+static int s_retry_count    = 0;
+static int s_network_index  = 0;   // which SSID we're currently trying
 
 // ── switch to the next known network ─────────────────────────────────────────
 

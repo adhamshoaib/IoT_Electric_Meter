@@ -1,11 +1,12 @@
 #include "http_client.h"
 #include "esp_crt_bundle.h"
+
 static const char *TAG = "SMART_METER";
 
  esp_err_t firebase_put_last(time_t ts, float energy_kwh)
 {
     const char *url =
-"https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app/test/last.json";
+    "https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app/test/last.json";
 
     char payload[128];
     snprintf(payload, sizeof(payload),
