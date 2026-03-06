@@ -8,11 +8,10 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
-
 #include <string.h>
 
-#define WIFI_UERNAME "Zeyad iPhone"
-#define WIFI_PASSWORD "11111111"
+#define WIFI_USERNAME "ashoaib"
+#define WIFI_PASSWORD "adham2205"
 
 #define WIFI_CONNECTED_BIT BIT0
 #define MAX_RETRY          10
@@ -66,12 +65,12 @@ void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_UERNAME,
-            .password = WIFI_PASSWORD,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-        },
-    };
+    .sta = {
+        .ssid = WIFI_USERNAME,
+        .password = WIFI_PASSWORD,
+        .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+    },
+};
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT,

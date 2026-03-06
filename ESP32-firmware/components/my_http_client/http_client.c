@@ -1,4 +1,5 @@
 #include "http_client.h"
+#include "esp_crt_bundle.h"
 static const char *TAG = "SMART_METER";
 
  esp_err_t firebase_put_last(time_t ts, float energy_kwh)
