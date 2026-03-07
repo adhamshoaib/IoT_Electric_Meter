@@ -1,5 +1,5 @@
-#ifndef ADC_CONT.H
-#define ADC_CONT.H
+#ifndef ADC_CONT_H
+#define ADC_CONT_H
 
 #include "esp_err.h"
 #include "esp_adc/adc_continuous.h"

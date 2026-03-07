@@ -1,4 +1,4 @@
-#include "voltage_sensor.h"
+#include "current_sensor.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -8,21 +8,21 @@
 #include <math.h>
 #include <string.h>
 
-#define TAG "VOLTAGE_SENSOR"
+#define TAG "CURRENT_SENSOR"
 
 // ─── internal context ────────────────────────────────────────────────────────
 
-struct voltage_sensor_ctx {
+struct current_sensor_ctx {
     adc_channel_t     channel;
     float             dc_offset_mv;   // default from define, overridden by calibration
 
     // ── accumulator (written from ADC task) ──
     float             sum_sq;
-    float             peak_sq;
+    float             ipeak;
     uint32_t          sample_count;
 
     // ── instantaneous sample (written from ADC task) ──
-    float             v_inst;
+    float             i_inst;
 
     // ── calibration state ──
     volatile bool     calibrating;    // true while feed() is collecting cal samples
@@ -32,31 +32,31 @@ struct voltage_sensor_ctx {
     SemaphoreHandle_t cal_done_sem;   // feed() gives this when cal_target reached
 
     // ── result (mutex-protected) ──
-    voltage_sensor_result_t              result;
+    current_sensor_result_t              result;
     SemaphoreHandle_t mutex;
 };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-static inline float s_to_real_volts(const voltage_sensor_ctx_t *ctx, float raw_mv)
+static inline float s_to_real_amps(const current_sensor_ctx_t *ctx, float raw_mv)
 {
-    return ((raw_mv - ctx->dc_offset_mv) / 1000.0f) * VOLTAGE_SENSOR_SCALE_FACTOR;
+    return ((raw_mv - ctx->dc_offset_mv) / 1000.0f) * CURRENT_SENSOR_SCALE_FACTOR  * CURRENT_SENSOR_CAL_FACTOR;
 }
 
 // ─── public API ──────────────────────────────────────────────────────────────
 
-esp_err_t voltage_sensor_init(adc_channel_t channel, voltage_sensor_ctx_t **out_ctx)
+esp_err_t current_sensor_init(adc_channel_t channel, current_sensor_ctx_t **out_ctx)
 {
     if (out_ctx == NULL) return ESP_ERR_INVALID_ARG;
 
-    voltage_sensor_ctx_t *ctx = calloc(1, sizeof(voltage_sensor_ctx_t));
+    current_sensor_ctx_t *ctx = calloc(1, sizeof(current_sensor_ctx_t));
     if (ctx == NULL) {
         ESP_LOGE(TAG, "Failed to allocate context");
         return ESP_ERR_NO_MEM;
     }
 
     ctx->channel      = channel;
-    ctx->dc_offset_mv = VOLTAGE_SENSOR_DC_OFFSET_MV;
+    ctx->dc_offset_mv = CURRENT_SENSOR_DC_OFFSET_MV;
 
     ctx->mutex = xSemaphoreCreateMutex();
     if (ctx->mutex == NULL) {
@@ -81,13 +81,13 @@ esp_err_t voltage_sensor_init(adc_channel_t channel, voltage_sensor_ctx_t **out_
     return ESP_OK;
 }
 
-void voltage_sensor_feed(voltage_sensor_ctx_t *ctx, float raw_mv)
+void current_sensor_feed(current_sensor_ctx_t *ctx, float raw_mv)
 {
     if (ctx == NULL) return;
 
     // ── calibration path ──
     if (ctx->calibrating) {
-        if (raw_mv >= VOLTAGE_SENSOR_ADC_MIN_MV && raw_mv <= VOLTAGE_SENSOR_ADC_MAX_MV) {
+        if (raw_mv >= CURRENT_SENSOR_ADC_MIN_MV && raw_mv <= CURRENT_SENSOR_ADC_MAX_MV) {
             ctx->cal_sum += raw_mv;
             ctx->cal_count++;
             if (ctx->cal_count >= ctx->cal_target) {
@@ -99,44 +99,44 @@ void voltage_sensor_feed(voltage_sensor_ctx_t *ctx, float raw_mv)
     }
 
     // ── normal path ──
-    if (raw_mv < VOLTAGE_SENSOR_ADC_MIN_MV || raw_mv > VOLTAGE_SENSOR_ADC_MAX_MV) return;
+    if (raw_mv < CURRENT_SENSOR_ADC_MIN_MV || raw_mv > CURRENT_SENSOR_ADC_MAX_MV) return;
 
-    float v = s_to_real_volts(ctx, raw_mv);
-    ctx->v_inst = v;
+    float v = s_to_real_amps(ctx, raw_mv);
+    ctx->i_inst = v;
     ctx->sum_sq  += v * v;
 
     float v_abs = (v < 0.0f) ? -v : v;
-    if (v_abs > ctx->peak_sq) ctx->peak_sq = v_abs;
+    if (v_abs > ctx->ipeak) ctx->ipeak = v_abs;
 
     ctx->sample_count++;
 
-    if (ctx->sample_count >= VOLTAGE_SENSOR_WINDOW_SIZE) {
+    if (ctx->sample_count >= CURRENT_SENSOR_WINDOW_SIZE) {
         float rms_val  = sqrtf(ctx->sum_sq / (float)ctx->sample_count);
-        float peak_val = ctx->peak_sq;
+        float peak_val = ctx->ipeak;
         uint32_t n     = ctx->sample_count;
 
-        bool plausible = (rms_val <= VOLTAGE_SENSOR_MAX_VRMS_V);
+        bool plausible = (rms_val <= CURRENT_SENSOR_MAX_IRMS_A);
 
         if (xSemaphoreTake(ctx->mutex, 0) == pdTRUE) {
             if (plausible) {
-                ctx->result.vrms_v         = rms_val;
-                ctx->result.vpeak_v         = peak_val;
+                ctx->result.irms_a         = rms_val;
+                ctx->result.ipeak_a         = peak_val;
                 ctx->result.window_samples = n;
                 ctx->result.valid          = true;
             } else {
                 ctx->result.valid = false;
-                ESP_LOGW(TAG, "Vrms sanity check failed: %.1f V — sensor disconnected?", (double)rms_val);
+                ESP_LOGW(TAG, "Irms sanity check failed: %.2f A — sensor disconnected?", (double)rms_val);
             }
             xSemaphoreGive(ctx->mutex);
         }
 
         ctx->sum_sq          = 0.0f;
-        ctx->peak_sq          = 0.0f;
+        ctx->ipeak          = 0.0f;
         ctx->sample_count  = 0;
     }
 }
 
-void voltage_sensor_get_result(const voltage_sensor_ctx_t *ctx, voltage_sensor_result_t *out)
+void current_sensor_get_result(const current_sensor_ctx_t *ctx, current_sensor_result_t *out)
 {
     if (ctx == NULL || out == NULL) return;
 
@@ -144,18 +144,18 @@ void voltage_sensor_get_result(const voltage_sensor_ctx_t *ctx, voltage_sensor_r
         *out = ctx->result;
         xSemaphoreGive(ctx->mutex);
     } else {
-        memset(out, 0, sizeof(voltage_sensor_result_t));
+        memset(out, 0, sizeof(current_sensor_result_t));
         out->valid = false;
     }
 }
 
-float voltage_sensor_get_instantaneous(const voltage_sensor_ctx_t *ctx)
+float current_sensor_get_instantaneous(const current_sensor_ctx_t *ctx)
 {
     if (ctx == NULL) return 0.0f;
-    return ctx->v_inst;
+    return ctx->i_inst;
 }
 
-void voltage_sensor_calibrate_offset(voltage_sensor_ctx_t *ctx, uint32_t num_samples)
+void current_sensor_calibrate_offset(current_sensor_ctx_t *ctx, uint32_t num_samples)
 {
     if (ctx == NULL || num_samples == 0) return;
 
@@ -176,22 +176,22 @@ void voltage_sensor_calibrate_offset(voltage_sensor_ctx_t *ctx, uint32_t num_sam
 
         // Reset Vrms accumulator so stale data doesn't corrupt first result
         ctx->sum_sq          = 0.0f;
-        ctx->peak_sq          = 0.0f;
+        ctx->ipeak          = 0.0f;
         ctx->sample_count  = 0;
         ctx->result.valid  = false;
 
         ESP_LOGI(TAG, "Calibration done — offset: %.1f mV (was %.1f mV, delta: %+.1f mV)",
                  (double)new_offset,
-                 (double)VOLTAGE_SENSOR_DC_OFFSET_MV,
-                 (double)(new_offset - VOLTAGE_SENSOR_DC_OFFSET_MV));
-        ESP_LOGI(TAG, "To make permanent: #define VOLTAGE_SENSOR_DC_OFFSET_MV  %.1ff", (double)new_offset);
+                 (double)CURRENT_SENSOR_DC_OFFSET_MV,
+                 (double)(new_offset - CURRENT_SENSOR_DC_OFFSET_MV));
+        ESP_LOGI(TAG, "To make permanent: #define CURRENT_SENSOR_DC_OFFSET_MV  %.1ff", (double)new_offset);
     } else {
         ctx->calibrating = false;
         ESP_LOGE(TAG, "Calibration timed out — check ADC is running");
     }
 }
 
-bool voltage_sensor_calibration_done(voltage_sensor_ctx_t *ctx)
+bool current_sensor_calibration_done(current_sensor_ctx_t *ctx)
 {
     // With the semaphore approach calibrate_offset() blocks until done,
     // so this is only needed if caller wants non-blocking behaviour.
@@ -200,20 +200,20 @@ bool voltage_sensor_calibration_done(voltage_sensor_ctx_t *ctx)
     return !ctx->calibrating;
 }
 
-void voltage_sensor_reset(voltage_sensor_ctx_t *ctx)
+void current_sensor_reset(current_sensor_ctx_t *ctx)
 {
     if (ctx == NULL) return;
     if (xSemaphoreTake(ctx->mutex, portMAX_DELAY) == pdTRUE) {
         ctx->sum_sq          = 0.0f;
-        ctx->peak_sq          = 0.0f;
+        ctx->ipeak          = 0.0f;
         ctx->sample_count  = 0;
-        ctx->v_inst        = 0.0f;
+        ctx->i_inst        = 0.0f;
         ctx->result.valid  = false;
         xSemaphoreGive(ctx->mutex);
     }
 }
 
-void voltage_sensor_deinit(voltage_sensor_ctx_t *ctx)
+void current_sensor_deinit(current_sensor_ctx_t *ctx)
 {
     if (ctx == NULL) return;
     vSemaphoreDelete(ctx->mutex);

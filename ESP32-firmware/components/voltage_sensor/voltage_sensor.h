@@ -1,5 +1,4 @@
-#ifndef VOLTAGE_SENSOR.H
-#define VOLTAGE_SENSOR.H
+#pragma once
 
 #include "esp_err.h"
 #include "adc_cont.h"
@@ -7,31 +6,39 @@
 #include <stdbool.h>
 #include <math.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // ─── tunables ────────────────────────────────────────────────────────────────
 
 // Number of ADC samples accumulated before Vrms is recomputed.
-// At 20 kHz, 200 samples = 10 ms window = one full cycle at 100 Hz (conservative).
 // For 50 Hz mains: 20000 / 50 = 400 samples = exactly one cycle.
-#define VOLTAGE_SENSOR_WINDOW_SIZE     400
+#define VOLTAGE_SENSOR_WINDOW_SIZE      400
 
-// Voltage divider + signal conditioning scale factor:
+// Voltage divider + signal conditioning scale factor.
 // actual_voltage = (adc_mv / 1000.0) * VOLTAGE_SENSOR_SCALE_FACTOR
-// Set this to match your resistor divider ratio.
-// Example: if you divided 325Vpeak down to 3.3V → scale = 325.0 / 3.3 ≈ 98.5
-#define VOLTAGE_SENSOR_SCALE_FACTOR    341.5f   // override for your circuit
+#define VOLTAGE_SENSOR_SCALE_FACTOR     341.5f    // set from Phase 1 diagnostics
 
-// DC offset of the ADC signal in mV (midpoint of AC waveform on ADC input).
-// For a biased AC signal centered at Vcc/2 on a 3.3V supply: ~1650 mV.
-// Set to 0 if your signal is already DC-free.
-#define VOLTAGE_SENSOR_DC_OFFSET_MV    2500.0f
+// DC bias at the ADC pin (midpoint of AC waveform).
+// Use voltage_sensor_calibrate_offset() at startup to measure this
+// automatically, then copy the logged value here for permanent use.
+#define VOLTAGE_SENSOR_DC_OFFSET_MV     1650.0f
 
-// ─── result type ─────────────────────────────────────────────────────────────
+// Valid ADC input range at ADC_ATTEN_DB_12 on ESP32.
+#define VOLTAGE_SENSOR_ADC_MIN_MV       0.0f
+#define VOLTAGE_SENSOR_ADC_MAX_MV       3100.0f
+
+// Sanity ceiling — Vrms above this is marked invalid.
+#define VOLTAGE_SENSOR_MAX_VRMS_V       300.0f
+
+// ─── result ──────────────────────────────────────────────────────────────────
 
 typedef struct {
     float    vrms_v;            ///< RMS voltage in Volts (scaled to real-world)
     float    vpeak_v;           ///< Peak voltage seen in this window
-    uint32_t window_samples;    ///< How many samples went into this result
-    bool     valid;             ///< false until first full window is complete
+    uint32_t window_samples;    ///< Samples that went into this result
+    bool     valid;             ///< false until first full window completes
 } voltage_sensor_result_t;
 
 // ─── handle ──────────────────────────────────────────────────────────────────
@@ -50,12 +57,9 @@ typedef struct voltage_sensor_ctx voltage_sensor_ctx_t;
 esp_err_t voltage_sensor_init(adc_channel_t channel, voltage_sensor_ctx_t **out_ctx);
 
 /**
- * @brief Feed one calibrated ADC sample (in mV) into the sensor.
+ * @brief Feed one calibrated ADC sample (mV) into the sensor.
  *
- * Call this from your ADC callback for samples that match this sensor's
- * channel.  Internally accumulates sum-of-squares; Vrms is recomputed
- * automatically every voltage_sensor_WINDOW_SIZE samples.
- *
+ * Call from your ADC callback for samples matching this sensor's channel.
  * Safe to call from ADC task context — no heap allocation, no blocking.
  *
  * @param ctx       Sensor context.
@@ -66,18 +70,16 @@ void voltage_sensor_feed(voltage_sensor_ctx_t *ctx, float raw_mv);
 /**
  * @brief Get the latest computed Vrms result.
  *
- * @param ctx    Sensor context.
- * @param out    Filled with the latest result. `valid` is false until
- *               the first window completes.
+ * @param ctx   Sensor context.
+ * @param out   Filled with the latest result. valid=false until first window.
  */
 void voltage_sensor_get_result(const voltage_sensor_ctx_t *ctx, voltage_sensor_result_t *out);
 
 /**
- * @brief Get the latest instantaneous voltage sample in Volts.
+ * @brief Get the latest instantaneous voltage in Volts.
  *
- * This is the most recent DC-removed, scaled voltage value.
- * Intended for use in instantaneous power calculation:
- *   p(t) = v_inst(t) * i_inst(t)
+ * DC-removed and scaled. Use for instantaneous power:
+ *   p(t) = voltage_sensor_get_instantaneous(v) * current_sensor_get_instantaneous(i)
  *
  * @param ctx   Sensor context.
  * @return      Instantaneous voltage in Volts. 0.0f if no sample yet.
@@ -85,7 +87,31 @@ void voltage_sensor_get_result(const voltage_sensor_ctx_t *ctx, voltage_sensor_r
 float voltage_sensor_get_instantaneous(const voltage_sensor_ctx_t *ctx);
 
 /**
- * @brief Reset accumulator and result. Does not free memory.
+ * @brief Start DC offset calibration.
+ *
+ * Call with the ZMPT101B primary disconnected from mains (no AC signal).
+ * Calibration runs asynchronously inside voltage_sensor_feed().
+ * Poll voltage_sensor_calibration_done() to know when it completes.
+ *
+ * @param ctx           Sensor context.
+ * @param num_samples   Samples to average — recommend >= 2000 (100ms at 20kHz).
+ */
+void voltage_sensor_calibrate_offset(voltage_sensor_ctx_t *ctx, uint32_t num_samples);
+
+/**
+ * @brief Check whether calibration has completed.
+ *
+ * Call this from your application task (NOT from the ADC callback).
+ * When it returns true it also logs the measured offset and resets
+ * the accumulator so normal Vrms computation can begin immediately.
+ *
+ * @param ctx   Sensor context.
+ * @return      true once calibration is complete, false while still running.
+ */
+bool voltage_sensor_calibration_done(voltage_sensor_ctx_t *ctx);
+
+/**
+ * @brief Reset accumulator and invalidate result. Does not free memory.
  * @param ctx   Sensor context.
  */
 void voltage_sensor_reset(voltage_sensor_ctx_t *ctx);
@@ -96,4 +122,6 @@ void voltage_sensor_reset(voltage_sensor_ctx_t *ctx);
  */
 void voltage_sensor_deinit(voltage_sensor_ctx_t *ctx);
 
+#ifdef __cplusplus
+}
 #endif
