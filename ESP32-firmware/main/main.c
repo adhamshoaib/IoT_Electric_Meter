@@ -26,7 +26,8 @@ void obtain_time()
     time_t now = 0;
     struct tm timeinfo = {0};
 
-    while (timeinfo.tm_year < (2020 - 1900)) {
+    while (timeinfo.tm_year < (2020 - 1900))
+    {
         time(&now);
         localtime_r(&now, &timeinfo);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -39,7 +40,8 @@ void app_main(void)
 {
     // NVS init
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
         nvs_flash_erase();
         nvs_flash_init();
     }
@@ -63,12 +65,15 @@ void app_main(void)
         time(&now);
 
         // Print JSON locally
-        printf("{\"ts\": %lld, \"energy_kwh\": %.4f}\n", (long long) now, energy_kwh);
+        printf("{\"ts\": %lld, \"energy_kwh\": %.4f}\n", (long long)now, energy_kwh);
 
         // Upload to Firebase if WiFi is connected
-        if (wifi_is_connected()) {
-            firebase_put_last(now, energy_kwh);
-        } else {
+        if (wifi_is_connected())
+        {
+            firebase_post(now, energy_kwh);
+        }
+        else
+        {
             ESP_LOGW(TAG, "WiFi not connected, skipping Firebase upload");
         }
 

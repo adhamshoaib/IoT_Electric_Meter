@@ -3,7 +3,7 @@
 
 static const char *TAG = "SMART_METER";
 
-esp_err_t firebase_post_last(time_t ts, float energy_kwh)
+esp_err_t firebase_post(time_t ts, float energy_kwh)
 {
     const char *url =
         "https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app/test/last.json";
