@@ -20,8 +20,8 @@ typedef struct {
 } wifi_network_t;
 
 static const wifi_network_t wifi_list[] = {
-    { "ashoaib",      "adham2205" },
     { "Zeyad iPhone", "11111111"  },
+    { "ashoaib",      "adham2205" },    
     { "adham"       ,  "adham@9876"}
 };
 
