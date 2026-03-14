@@ -7,7 +7,7 @@ const http = require("http");
 // ── Configuration ───────────────────────────────────────────
 const CONFIG = {
   // Path where ESP32 pushes raw readings
-  RAW_READINGS_PATH: "test",
+  RAW_READINGS_PATH: "test/last",
 
   // Meter identifier
   METER_ID: "meter_001",

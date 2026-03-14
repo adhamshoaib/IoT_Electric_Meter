@@ -10,7 +10,7 @@ admin.initializeApp({
 });
 
 const db = admin.database();
-const testRef = db.ref("test");
+const testRef = db.ref("test/last");
 
 let energyKwh = 0.0;
 
