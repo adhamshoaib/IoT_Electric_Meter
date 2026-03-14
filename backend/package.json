@@ -1,0 +1,13 @@
+{
+  "name": "sem-rtdb-backend",
+  "version": "1.0.0",
+  "description": "Backend server for Smart Electric Meter — processes ESP32 readings from Firebase RTDB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
