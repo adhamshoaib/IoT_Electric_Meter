@@ -2,7 +2,6 @@ const admin = require("firebase-admin");
 const path = require("path");
 const http = require("http");
 
-//test
 
 // ── Configuration ───────────────────────────────────────────
 const CONFIG = {
@@ -15,7 +14,7 @@ const CONFIG = {
   // Time in ms
   HOURLY_INTERVAL_MS: 3600000,
 
-  // Firebase RTDB URL (update this to match your project)
+  // Firebase RTDB URL 
   DATABASE_URL:
     "https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app",
 };
