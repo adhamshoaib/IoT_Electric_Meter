@@ -1,9 +1,3 @@
-// ============================================================
-//  ESP32 Simulator — Pushes fake readings to Firebase RTDB
-//  Use this to test server.js without the actual hardware.
-//  Run:  node simulate_esp32.js
-// ============================================================
-
 const admin = require("firebase-admin");
 const path = require("path");
 
