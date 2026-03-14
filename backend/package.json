@@ -5,8 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
-    
+    "dev": "node server.js",
+    "simulate": "node simulate_esp32.js"
   },
   "dependencies": {
     "firebase-admin": "^12.0.0"
