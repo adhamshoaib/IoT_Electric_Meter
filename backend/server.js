@@ -2,6 +2,8 @@ const admin = require("firebase-admin");
 const path = require("path");
 const http = require("http");
 
+//test
+
 // ── Configuration ───────────────────────────────────────────
 const CONFIG = {
   // Path where ESP32 pushes raw readings
