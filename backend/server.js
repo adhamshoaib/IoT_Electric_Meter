@@ -2,6 +2,7 @@ const admin = require("firebase-admin");
 const path = require("path");
 const http = require("http");
 
+//TEST
 
 // ── Configuration ───────────────────────────────────────────
 const CONFIG = {
