@@ -12,7 +12,7 @@ const CONFIG = {
   // Meter identifier
   METER_ID: "meter_001",
 
-  // How often to save hourly logs (in ms) — 3600000 = 1 hour
+  // Time in ms
   HOURLY_INTERVAL_MS: 3600000,
 
   // Firebase RTDB URL (update this to match your project)
@@ -21,7 +21,7 @@ const CONFIG = {
 };
 
 // ── Firebase Initialization ─────────────────────────────────
-// Load service account from environment variable (cloud) or local file (dev)
+// Load service account from environment variable or local file 
 let serviceAccount;
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -46,9 +46,8 @@ const logsRef = db.ref("logs");
 // Keeps track of the latest reading in memory
 let latestReading = null;
 
-// ── 1. Listen for new readings ──────────────────────────────
-//    Every time the ESP32 pushes a new child to "test/",
-//    we update "current_reading" and delete the old raw entry.
+// ──  Listen for new readings ──────────────────────────────
+
 
 rawReadingsRef.on("child_added", async (snapshot) => {
   const data = snapshot.val();
@@ -66,7 +65,7 @@ rawReadingsRef.on("child_added", async (snapshot) => {
     // Overwrite the current_reading node with the latest values
     await currentReadingRef.set(latestReading);
 
-    // Delete the processed raw reading to save storage
+    // Delete the processed raw reading
     await rawReadingsRef.child(key).remove();
 
     console.log(
@@ -77,9 +76,8 @@ rawReadingsRef.on("child_added", async (snapshot) => {
   }
 });
 
-// ── 2. Save hourly snapshot ─────────────────────────────────
-//    Every hour, push a new reading to "logs/"
-//    Each entry accumulates — nothing gets overwritten.
+// ── Save hourly snapshot ─────────────────────────────────
+
 
 async function saveHourlyLog() {
   if (!latestReading) {
@@ -116,7 +114,7 @@ function startHourlyTimer() {
 
 // ── Start ────────────────────────────────────────────────────
 console.log("╔══════════════════════════════════════════════════╗");
-console.log("║   Smart Electric Meter — Backend Server         ║");
+console.log("║   Smart Electric Meter — Backend Server          ║");
 console.log("╠══════════════════════════════════════════════════╣");
 console.log(`║  RTDB URL  : ${CONFIG.DATABASE_URL}`);
 console.log(`║  Meter ID  : ${CONFIG.METER_ID}`);
@@ -130,7 +128,7 @@ console.log(
   `[${new Date().toLocaleTimeString()}] Server running. Listening for ESP32 readings...\n`
 );
 
-// ── Health Check Server (required for cloud hosting) ─────────
+// ── Health Check Server for cloud hosting ─────────
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "application/json" });

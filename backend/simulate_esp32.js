@@ -14,9 +14,9 @@ const testRef = db.ref("test");
 
 let energyKwh = 0.0;
 
-// Push a fake reading every 2 seconds (simulating ESP32)
+// Push a reading every 2 seconds
 setInterval(async () => {
-  energyKwh += 0.0014; // Simulate energy accumulating
+  energyKwh += 0.0014;
   energyKwh = parseFloat(energyKwh.toFixed(4));
 
   const reading = {
@@ -34,4 +34,4 @@ setInterval(async () => {
   }
 }, 2000);
 
-console.log("🔌 ESP32 Simulator running — pushing a reading every 2 seconds...\n");
+console.log(" ESP32 Simulator running — pushing a reading every 2 seconds...\n");
