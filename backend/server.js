@@ -1,10 +1,3 @@
-// ============================================================
-//  Smart Electric Meter — Backend Server
-//  Processes raw ESP32 readings from Firebase RTDB into:
-//    1. A single "current_reading" node (always the latest)
-//    2. Hourly snapshots under "logs/"
-// ============================================================
-
 const admin = require("firebase-admin");
 const path = require("path");
 const http = require("http");
@@ -75,7 +68,7 @@ rawReadingsRef.on("child_added", async (snapshot) => {
     await rawReadingsRef.child(key).remove();
 
     console.log(
-      `[${new Date().toLocaleTimeString()}] ⚡ Current reading updated: ${latestReading.energy_kwh} kWh  (raw entry ${key} deleted)`
+      `[${new Date().toLocaleTimeString()}]  Current reading updated: ${latestReading.energy_kwh} kWh  (raw entry ${key} deleted)`
     );
   } catch (err) {
     console.error("Error processing reading:", err.message);
