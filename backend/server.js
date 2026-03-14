@@ -89,7 +89,7 @@ async function saveHourlyLog() {
 
   const logEntry = {
     energy_kwh: latestReading.energy_kwh,
-    ts: Date.now(),
+    ts: data.ts ?? Date.now(),
   };
 
   try {
