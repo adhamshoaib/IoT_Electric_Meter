@@ -13,7 +13,7 @@ const CONFIG = {
   METER_ID: "meter_001",
 
   // Time in ms
-  HOURLY_INTERVAL_MS: 60000,       //3600000
+  HOURLY_INTERVAL_MS: 3600000,       //3600000
 
   // Firebase RTDB URL 
   DATABASE_URL:
