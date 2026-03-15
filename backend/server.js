@@ -15,6 +15,9 @@ const CONFIG = {
   // Time in ms
   HOURLY_INTERVAL_MS: 3600000,       //3600000
 
+  // Log retention (7 days in seconds)
+  LOG_RETENTION_SECONDS: 7 * 24 * 3600,
+
   // Firebase RTDB URL 
   DATABASE_URL:
     "https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app",
@@ -58,7 +61,7 @@ rawReadingsRef.on("child_added", async (snapshot) => {
   // Build the current reading object
   latestReading = {
     energy_kwh: data.energy_kwh ?? null,
-    ts: data.ts ?? Date.now(),
+    ts: data.ts ?? Math.floor(Date.now() / 1000),
   };
 
   try {
@@ -89,7 +92,7 @@ async function saveHourlyLog() {
 
   const logEntry = {
     energy_kwh: latestReading.energy_kwh,
-    ts: latestReading.ts ?? Date.now(),
+    ts: Math.floor(Date.now() / 1000),
   };
 
   try {
@@ -99,6 +102,22 @@ async function saveHourlyLog() {
     );
   } catch (err) {
     console.error("Error saving hourly log:", err.message);
+  }
+
+  // Delete logs older than 7 days
+  const cutoff = Math.floor(Date.now() / 1000) - CONFIG.LOG_RETENTION_SECONDS;
+  try {
+    const oldLogs = await logsRef.orderByChild("ts").endAt(cutoff).once("value");
+    if (oldLogs.exists()) {
+      const updates = {};
+      oldLogs.forEach((child) => { updates[child.key] = null; });
+      await logsRef.update(updates);
+      console.log(
+        `[${new Date().toLocaleTimeString()}]  Pruned ${Object.keys(updates).length} logs older than 7 days`
+      );
+    }
+  } catch (err) {
+    console.error("Error pruning old logs:", err.message);
   }
 }
 
