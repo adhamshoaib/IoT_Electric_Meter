@@ -21,8 +21,7 @@ esp_err_t uart_service_init(const uart_service_config_t *config, uart_service_ha
     *out_handle = NULL;
 
     // 2. Allocate handle (calloc zeros all fields)
-    struct uart_service_t *
-        handle = calloc(1, sizeof(struct uart_service_t));
+    struct uart_service_t *handle = calloc(1, sizeof(struct uart_service_t));
     if (!handle)
         return ESP_ERR_NO_MEM;
 
@@ -62,4 +61,31 @@ cleanup_driver:
     uart_driver_delete(config->port);
     free(handle);
     return ret;
+}
+
+esp_err_t uart_service_send(uart_service_handle_t handle, const uint8_t *data, size_t len)
+{
+    if (!handle || !data || len == 0)
+        return ESP_ERR_INVALID_ARG;
+
+    int err = uart_write_bytes(handle->port, data, len);
+    if (err == -1)
+        return ESP_FAIL;
+    if ((size_t)err < len)
+        return ESP_ERR_INVALID_SIZE;
+
+    return ESP_OK;
+}
+
+esp_err_t uart_service_deinit(uart_service_handle_t *handle)
+{
+    if (!handle || !*handle)
+        return ESP_ERR_INVALID_ARG;
+
+    esp_err_t err = uart_driver_delete((*handle)->port);
+
+    free(*handle);
+    *handle = NULL;
+
+    return err;
 }

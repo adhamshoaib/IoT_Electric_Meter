@@ -24,4 +24,4 @@ esp_err_t uart_service_send(uart_service_handle_t handle, const uint8_t *data, s
 
 esp_err_t uart_service_read(uart_service_handle_t handle, uint8_t *buf, size_t max_len, size_t *out_len, uint32_t timeout_ms);
 
-esp_err_t uart_service_deinit(uart_service_handle_t handle);
+esp_err_t uart_service_deinit(uart_service_handle_t *handle);
