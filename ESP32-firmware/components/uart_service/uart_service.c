@@ -6,10 +6,12 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 
+// Minimum RX ring buffer size enforced by ESP-IDF
 #define UART_SERVICE_MIN_RX_BUF_SIZE 128
 
 static const char *TAG = "UART_SERVICE";
 
+// Internal handle — fields hidden from callers via opaque pointer in header
 struct uart_service_t
 {
     uart_port_t port;
@@ -37,6 +39,7 @@ esp_err_t uart_service_init(const uart_service_config_t *config, uart_service_ha
         .source_clk = UART_SCLK_DEFAULT,
     };
 
+    // Order matters: param_config before driver_install
     esp_err_t ret = uart_param_config(config->port, &uart_config);
     if (ret != ESP_OK)
     {
@@ -55,7 +58,7 @@ esp_err_t uart_service_init(const uart_service_config_t *config, uart_service_ha
     if (ret != ESP_OK)
     {
         ESP_LOGE(TAG, "uart_set_pin failed: %s", esp_err_to_name(ret));
-        goto cleanup_driver;
+        goto cleanup_driver; // driver installed, must be deleted before returning
     }
 
     ESP_LOGI(TAG, "UART%d initialized at %d baud", handle->port, config->baud_rate);
@@ -77,6 +80,7 @@ esp_err_t uart_service_send(uart_service_handle_t handle, const uint8_t *data, s
     if (!handle || !data || len == 0)
         return ESP_ERR_INVALID_ARG;
 
+    // uart_write_bytes returns bytes written or -1 on error
     int err = uart_write_bytes(handle->port, data, len);
     if (err == -1)
         return ESP_FAIL;
@@ -97,6 +101,8 @@ esp_err_t uart_service_read(uart_service_handle_t handle, uint8_t *buf, size_t m
 
     *out_len = 0;
 
+    // uart_read_bytes returns bytes read or -1 on error
+    // 0 bytes is not an error — it means timeout elapsed with no data
     int err = uart_read_bytes(handle->port, buf, (uint32_t)max_len, pdMS_TO_TICKS(timeout_ms));
     if (err == -1)
         return ESP_FAIL;
@@ -111,6 +117,7 @@ esp_err_t uart_service_deinit(uart_service_handle_t *handle)
     if (!handle || !*handle)
         return ESP_ERR_INVALID_ARG;
 
+    // Log port before freeing — handle is invalid after free
     ESP_LOGI(TAG, "UART%d deinitializing", (*handle)->port);
 
     esp_err_t err = uart_driver_delete((*handle)->port);
