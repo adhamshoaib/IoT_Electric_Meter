@@ -1,8 +1,9 @@
 #include "uart_service.h"
 
 #include "driver/uart.h"
-#include "driver/gpio.h"
 #include "esp_check.h"
+
+#define UART_SERVICE_MIN_RX_BUF_SIZE 128
 
 static const char *TAG = "UART_SERVICE";
 
@@ -14,11 +15,14 @@ struct uart_service_t
 esp_err_t uart_service_init(const uart_service_config_t *config, uart_service_handle_t *out_handle)
 {
     // 1. Validate inputs
-    if (!config || !out_handle)
+    if (!config || !out_handle || config->port < 0 || config->port >= SOC_UART_NUM || config->rx_buffer_size < UART_SERVICE_MIN_RX_BUF_SIZE)
         return ESP_ERR_INVALID_ARG;
 
+    *out_handle = NULL;
+
     // 2. Allocate handle (calloc zeros all fields)
-    struct uart_service_t *handle = calloc(1, sizeof(struct uart_service_t));
+    struct uart_service_t *
+        handle = calloc(1, sizeof(struct uart_service_t));
     if (!handle)
         return ESP_ERR_NO_MEM;
 
