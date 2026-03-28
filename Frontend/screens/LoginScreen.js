@@ -38,7 +38,7 @@ export default function LoginScreen({ navigation }) {
             <Text style={styles.logoIcon}>⚡</Text>
           </View>
           <Text style={styles.brandText}>
-            Han5ls <Text style={styles.brandAccent}>Inshallah</Text>
+            IoT <Text style={styles.brandAccent}>Electric Meter</Text>
           </Text>
           <Text style={styles.brandSub}>Graduation Project · Sign in to continue</Text>
         </View>
@@ -54,7 +54,7 @@ export default function LoginScreen({ navigation }) {
           <TextInput
             style={styles.input}
             placeholder="ahmed@example.com"
-            placeholderTextColor="#334155"
+            placeholderTextColor="#475569"
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -67,7 +67,7 @@ export default function LoginScreen({ navigation }) {
             <TextInput
               style={[styles.input, { flex: 1, marginBottom: 0 }]}
               placeholder="••••••••"
-              placeholderTextColor="#334155"
+              placeholderTextColor="#475569"
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPass}
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     fontSize: 26, fontWeight: '800', color: '#f8fafc',
   },
   brandAccent: { color: '#00d2c8' },
-  brandSub: { fontSize: 12, color: '#334155', marginTop: 4 },
+  brandSub: { fontSize: 12, color: '#475569', marginTop: 4 },
   card: {
     backgroundColor: 'rgba(15,22,35,0.95)',
     borderWidth: 1, borderColor: 'rgba(0,210,200,0.15)',
@@ -190,7 +190,7 @@ const styles = StyleSheet.create({
     color: '#080d14', fontSize: 15, fontWeight: '800',
   },
   footerText: {
-    textAlign: 'center', color: '#334155',
+    textAlign: 'center', color: '#475569',
     fontSize: 12, marginTop: 16,
   },
   footerLink: { color: '#00d2c8', fontWeight: '600' },
@@ -201,5 +201,5 @@ const styles = StyleSheet.create({
   },
   iconItem: { alignItems: 'center' },
   iconEmoji: { fontSize: 20 },
-  iconLabel: { fontSize: 10, color: '#334155', marginTop: 4 },
+  iconLabel: { fontSize: 10, color: '#475569', marginTop: 4 },
 });
