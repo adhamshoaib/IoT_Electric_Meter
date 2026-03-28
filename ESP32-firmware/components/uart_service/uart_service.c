@@ -1,7 +1,9 @@
 #include "uart_service.h"
 
+#include <stdlib.h>
 #include "driver/uart.h"
 #include "esp_check.h"
+#include "freertos/FreeRTOS.h"
 
 #define UART_SERVICE_MIN_RX_BUF_SIZE 128
 
@@ -73,6 +75,21 @@ esp_err_t uart_service_send(uart_service_handle_t handle, const uint8_t *data, s
         return ESP_FAIL;
     if ((size_t)err < len)
         return ESP_ERR_INVALID_SIZE;
+
+    return ESP_OK;
+}
+
+esp_err_t uart_service_read(uart_service_handle_t handle, uint8_t *buf, size_t max_len, size_t *out_len, uint32_t timeout_ms)
+{
+    if (!handle || !buf || max_len == 0 || !out_len)
+        return ESP_ERR_INVALID_ARG;
+
+    *out_len = 0;
+
+    int err = uart_read_bytes(handle->port, buf, (uint32_t)max_len, pdMS_TO_TICKS(timeout_ms));
+    if (err == -1)
+        return ESP_FAIL;
+    *out_len = (size_t)err;
 
     return ESP_OK;
 }
