@@ -127,7 +127,4 @@ esp_err_t adc_driver_stop(void);
  * @return ESP_ERR_INVALID_STATE if the driver is not running.
  * @return ESP_ERR_INVALID_ARG if out or out_count is NULL.
  */
-esp_err_t adc_driver_read(adc_sample_pair_t *out,
-                          size_t max_count,
-                          size_t *out_count,
-                          uint32_t timeout_ms);
+esp_err_t adc_driver_read(adc_sample_pair_t *out, size_t max_count, size_t *out_count, uint32_t timeout_ms);
