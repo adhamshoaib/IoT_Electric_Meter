@@ -1,75 +1,82 @@
+#include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
 #include "esp_log.h"
-#include "uart_service.h"
-
-// Connect GPIO4 (TX) to GPIO5 (RX) with a jumper wire for this test
-#define TEST_TX_PIN 17
-#define TEST_RX_PIN 16
-#define TEST_BAUD_RATE 115200
-#define TEST_UART_PORT UART_NUM_2
-#define TEST_BUF_SIZE 256
-#define TEST_TIMEOUT_MS 1000
+#include "nvs_flash.h"
+#include "lwip/apps/sntp.h"
+#include "esp_netif.h"
+#include "wifi.h"
+#include "http_client.h"
 
 static const char *TAG = "MAIN";
 
+float energy_kwh = 0.0;
+float power_kw = 1.0; // Simulated 1 kW load
+
+void obtain_time()
+{
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
+
+    time_t now = 0;
+    struct tm timeinfo = {0};
+
+    while (timeinfo.tm_year < (2020 - 1900))
+    {
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
+    ESP_LOGI(TAG, "Time obtained: %s", asctime(&timeinfo));
+}
+
 void app_main(void)
 {
-    // --- Init ---
-    uart_service_handle_t handle = NULL;
-
-    uart_service_config_t config = {
-        .port = TEST_UART_PORT,
-        .tx_pin = TEST_TX_PIN,
-        .rx_pin = TEST_RX_PIN,
-        .baud_rate = TEST_BAUD_RATE,
-        .rx_buffer_size = TEST_BUF_SIZE,
-        .tx_buffer_size = 0, // blocking TX
-    };
-
-    esp_err_t ret = uart_service_init(&config, &handle);
-    if (ret != ESP_OK)
+    // NVS init
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
-        ESP_LOGE(TAG, "Init failed: %s", esp_err_to_name(ret));
-        return;
+        nvs_flash_erase();
+        nvs_flash_init();
     }
 
-    // --- Send ---
-    const char *msg = "hello uart";
-    ret = uart_service_send(handle, (const uint8_t *)msg, strlen(msg));
-    if (ret != ESP_OK)
+    // WiFi init and wait for connection
+    wifi_init();
+    wifi_wait_connected();
+
+    ESP_LOGI(TAG, "WiFi connected, starting SNTP...");
+    obtain_time();
+
+    // Main loop
+    while (1)
     {
-        ESP_LOGE(TAG, "Send failed: %s", esp_err_to_name(ret));
-        goto done;
+        // Energy accumulation in kWh
+        float hours = 5.0 / 3600.0; // 5 seconds in hours
+        energy_kwh += power_kw * hours;
+
+        // Get Unix timestamp
+        time_t now;
+        time(&now);
+
+        // Print JSON locally
+        printf("{\"ts\": %lld, \"energy_kwh\": %.4f}\n", (long long)now, energy_kwh);
+
+        // Upload to Firebase if WiFi is connected
+        if (wifi_is_connected())
+        {
+            firebase_post(now, energy_kwh);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "WiFi not connected, skipping Firebase upload");
+        }
+
+        vTaskDelay(5000 / portTICK_PERIOD_MS); // 5 seconds
     }
-
-    // Small delay to let TX complete before reading back
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    // --- Read ---
-    uint8_t rx_buf[TEST_BUF_SIZE];
-    size_t rx_len = 0;
-
-    ret = uart_service_read(handle, rx_buf, sizeof(rx_buf), &rx_len, TEST_TIMEOUT_MS);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Read failed: %s", esp_err_to_name(ret));
-        goto done;
-    }
-
-    // --- Verify ---
-    if (rx_len == 0)
-    {
-        ESP_LOGW(TAG, "No data received — check TX/RX are bridged");
-        goto done;
-    }
-
-    if (rx_len == strlen(msg) && memcmp(rx_buf, msg, rx_len) == 0)
-        ESP_LOGI(TAG, "PASS: received \"%.*s\"", (int)rx_len, rx_buf);
-    else
-        ESP_LOGE(TAG, "FAIL: received %d bytes, expected %d", (int)rx_len, (int)strlen(msg));
-
-done:
-    uart_service_deinit(&handle);
 }
