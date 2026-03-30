@@ -72,9 +72,6 @@ esp_err_t adc_driver_init(void)
         goto cleanup_handle;
     }
 
-    if (adc_driver.raw_buf == NULL)
-        return ESP_ERR_NO_MEM;
-
     adc_driver.init = true;
     adc_driver.running = false;
 
