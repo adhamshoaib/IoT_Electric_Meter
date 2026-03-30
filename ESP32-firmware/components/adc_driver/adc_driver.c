@@ -1,11 +1,17 @@
+/**
+ * @file adc_driver.c
+ * @brief ADC driver implementation - see adc_driver.h for API documentation.
+ */
+
 #include "adc_driver.h"
 
 #include <stdbool.h>
+#include <stdlib.h>
 #include "esp_check.h"
 #include "esp_adc/adc_continuous.h"
 
-#define ADC_SAMPLE_RATE_HZ 20000 // 400 samples/cycle at 50Hz
-#define CYCLES_PER_WINDOW 4      // compute power every 4 cycles (80ms)
+#define ADC_SAMPLE_RATE_HZ 20000
+#define CYCLES_PER_WINDOW 4
 #define SAMPLES_PER_WINDOW (ADC_SAMPLE_RATE_HZ / 50 * CYCLES_PER_WINDOW)
 #define ADC_FRAME_SIZE (SAMPLES_PER_WINDOW * sizeof(adc_digi_output_data_t))
 #define ADC_RING_BUF_SIZE (ADC_FRAME_SIZE * 2)
@@ -19,14 +25,11 @@ typedef struct
 } adc_driver_t;
 
 #define NUM_CHANNELS 2
-
 static const adc_channel_t channels[NUM_CHANNELS] = {ADC_CHANNEL_6, ADC_CHANNEL_7};
-
 #define VOLTAGE_CHANNEL_IDX 0
 #define CURRENT_CHANNEL_IDX 1
 
 static adc_driver_t adc_driver = {0};
-
 static const char *TAG = "ADC_DRIVER";
 
 esp_err_t adc_driver_init(void)
