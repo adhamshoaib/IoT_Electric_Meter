@@ -1,3 +1,3 @@
-idf_component_register(SRCS "wifi.c"
+idf_component_register(SRCS "wifi_driver.c"
                        INCLUDE_DIRS "include"
                        REQUIRES esp_wifi esp_event)
