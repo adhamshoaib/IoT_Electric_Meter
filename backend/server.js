@@ -2,14 +2,8 @@ const admin = require("firebase-admin");
 const path = require("path");
 const http = require("http");
 
-//TEST
-
 // ── Configuration ───────────────────────────────────────────
 const CONFIG = {
-  // Path where ESP32 pushes raw readings
-  RAW_READINGS_PATH: "test/last",
-
-  // Meter identifier
   METER_ID: "meter_001",
 
   // Time in ms
@@ -18,13 +12,16 @@ const CONFIG = {
   // Log retention (7 days in seconds)
   LOG_RETENTION_SECONDS: 7 * 24 * 3600,
 
-  // Firebase RTDB URL 
+  // API key for ESP32 authentication
+  ESP32_API_KEY: process.env.ESP32_API_KEY || "sem-dev-key-2026",
+
+  // Firebase RTDB URL
   DATABASE_URL:
     "https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app",
 };
 
 // ── Firebase Initialization ─────────────────────────────────
-// Load service account from environment variable or local file 
+// Load service account from environment variable or local file
 let serviceAccount;
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -42,45 +39,28 @@ admin.initializeApp({
 const db = admin.database();
 
 // References
-const rawReadingsRef = db.ref(CONFIG.RAW_READINGS_PATH);
 const currentReadingRef = db.ref("current_reading");
 const logsRef = db.ref("logs");
 
 // Keeps track of the latest reading in memory
 let latestReading = null;
 
-// ──  Listen for new readings ──────────────────────────────
+// ── Process a reading (used by both HTTP endpoint and legacy listener) ──
 
-
-rawReadingsRef.on("child_added", async (snapshot) => {
-  const data = snapshot.val();
-  const key = snapshot.key;
-
-  if (!data) return;
-
-  // Build the current reading object
+async function processReading(energy_kwh, ts) {
   latestReading = {
-    energy_kwh: data.energy_kwh ?? null,
-    ts: data.ts ?? Math.floor(Date.now() / 1000),
+    energy_kwh: energy_kwh ?? null,
+    ts: ts ?? Math.floor(Date.now() / 1000),
   };
 
-  try {
-    // Overwrite the current_reading node with the latest values
-    await currentReadingRef.set(latestReading);
+  await currentReadingRef.set(latestReading);
 
-    // Delete the processed raw reading
-    await rawReadingsRef.child(key).remove();
-
-    console.log(
-      `[${new Date().toLocaleTimeString()}]  Current reading updated: ${latestReading.energy_kwh} kWh  (raw entry ${key} deleted)`
-    );
-  } catch (err) {
-    console.error("Error processing reading:", err.message);
-  }
-});
+  console.log(
+    `[${new Date().toLocaleTimeString()}] ⚡ Current reading updated: ${latestReading.energy_kwh} kWh`
+  );
+}
 
 // ── Save hourly snapshot ─────────────────────────────────
-
 
 async function saveHourlyLog() {
   if (!latestReading) {
@@ -126,10 +106,70 @@ function startHourlyTimer() {
   console.log(
     `[${new Date().toLocaleTimeString()}]  Logs will be saved every ${CONFIG.HOURLY_INTERVAL_MS / 1000} seconds`
   );
-
-  // Save first log after one interval, then repeat
   setInterval(saveHourlyLog, CONFIG.HOURLY_INTERVAL_MS);
 }
+
+// ── HTTP Server (health check + ESP32 endpoint) ──────────────
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try {
+        resolve(JSON.parse(body));
+      } catch (e) {
+        reject(new Error("Invalid JSON"));
+      }
+    });
+  });
+}
+
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer(async (req, res) => {
+  // ── Health check (GET /) ──
+  if (req.method === "GET" && req.url === "/") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({
+      status: "running",
+      meter: CONFIG.METER_ID,
+      latestReading: latestReading,
+    }));
+  }
+
+  // ── ESP32 reading endpoint (POST /reading) ──
+  if (req.method === "POST" && req.url === "/reading") {
+    // Check API key
+    const apiKey = req.headers["x-api-key"];
+    if (apiKey !== CONFIG.ESP32_API_KEY) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "Unauthorized: invalid API key" }));
+    }
+
+    try {
+      const data = await parseBody(req);
+
+      if (data.energy_kwh === undefined) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: "Missing energy_kwh field" }));
+      }
+
+      await processReading(data.energy_kwh, data.ts);
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ status: "ok", received: latestReading }));
+    } catch (err) {
+      console.error("Error on /reading:", err.message);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ── 404 for everything else ──
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Not found" }));
+});
 
 // ── Start ────────────────────────────────────────────────────
 console.log("╔══════════════════════════════════════════════════╗");
@@ -137,25 +177,13 @@ console.log("║   Smart Electric Meter — Backend Server          ║");
 console.log("╠══════════════════════════════════════════════════╣");
 console.log(`║  RTDB URL  : ${CONFIG.DATABASE_URL}`);
 console.log(`║  Meter ID  : ${CONFIG.METER_ID}`);
-console.log(`║  Listening : ${CONFIG.RAW_READINGS_PATH}/`);
+console.log(`║  Endpoint  : POST /reading (API key required)`);
 console.log("╚══════════════════════════════════════════════════╝");
 console.log("");
 
 startHourlyTimer();
 
-console.log(
-  `[${new Date().toLocaleTimeString()}] Server running. Listening for ESP32 readings...\n`
-);
-
-// ── Health Check Server for cloud hosting ─────────
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({
-    status: "running",
-    meter: CONFIG.METER_ID,
-    latestReading: latestReading,
-  }));
-}).listen(PORT, () => {
-  console.log(`[${new Date().toLocaleTimeString()}] Health check server on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`[${new Date().toLocaleTimeString()}] Server running on port ${PORT}`);
+  console.log(`[${new Date().toLocaleTimeString()}] Waiting for ESP32 readings on POST /reading\n`);
 });
