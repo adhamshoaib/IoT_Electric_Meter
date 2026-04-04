@@ -1,0 +1,4 @@
+.DS_Store
+.vscode/
+ESP32-firmware/.cache/
+ESP32-firmware/build/
