@@ -21,7 +21,7 @@ const CONFIG = {
 };
 
 // ── Firebase Initialization ─────────────────────────────────
-// Load service account from environment variable or local file
+// Load service account (environment variable / local file)
 let serviceAccount;
 if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -45,7 +45,7 @@ const logsRef = db.ref("logs");
 // Keeps track of the latest reading in memory
 let latestReading = null;
 
-// ── Process a reading (used by both HTTP endpoint and legacy listener) ──
+// ── Process a reading ──
 
 async function processReading(energy_kwh, ts) {
   latestReading = {
