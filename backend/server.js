@@ -56,7 +56,7 @@ async function processReading(energy_kwh, ts) {
   await currentReadingRef.set(latestReading);
 
   console.log(
-    `[${new Date().toLocaleTimeString()}] ⚡ Current reading updated: ${latestReading.energy_kwh} kWh`
+    `[${new Date().toLocaleTimeString()}] Current reading updated: ${latestReading.energy_kwh} kWh`
   );
 }
 
@@ -130,7 +130,7 @@ const PORT = process.env.PORT || 3000;
 const server = http.createServer(async (req, res) => {
   // ── Health check (GET /) ──
   if (req.method === "GET" && req.url === "/") {
-    res.writeHead(200, { "Content-Type": "application/json" });
+    res.writeHead(200, { "Content-Type": "application/json" });                               //Success 
     return res.end(JSON.stringify({
       status: "running",
       meter: CONFIG.METER_ID,
@@ -143,7 +143,7 @@ const server = http.createServer(async (req, res) => {
     // Check API key
     const apiKey = req.headers["x-api-key"];
     if (apiKey !== CONFIG.ESP32_API_KEY) {
-      res.writeHead(401, { "Content-Type": "application/json" });
+      res.writeHead(401, { "Content-Type": "application/json" });                         //Unauthorized
       return res.end(JSON.stringify({ error: "Unauthorized: invalid API key" }));
     }
 
@@ -151,23 +151,23 @@ const server = http.createServer(async (req, res) => {
       const data = await parseBody(req);
 
       if (data.energy_kwh === undefined) {
-        res.writeHead(400, { "Content-Type": "application/json" });
+        res.writeHead(400, { "Content-Type": "application/json" });                         //Bad Request
         return res.end(JSON.stringify({ error: "Missing energy_kwh field" }));
       }
 
       await processReading(data.energy_kwh, data.ts);
 
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, { "Content-Type": "application/json" });                         //Success
       return res.end(JSON.stringify({ status: "ok", received: latestReading }));
     } catch (err) {
       console.error("Error on /reading:", err.message);
-      res.writeHead(500, { "Content-Type": "application/json" });
+      res.writeHead(500, { "Content-Type": "application/json" });                         //Internal Server Error
       return res.end(JSON.stringify({ error: err.message }));
     }
   }
 
   // ── 404 for everything else ──
-  res.writeHead(404, { "Content-Type": "application/json" });
+  res.writeHead(404, { "Content-Type": "application/json" });                             //Not Found
   res.end(JSON.stringify({ error: "Not found" }));
 });
 
