@@ -7,7 +7,7 @@ export const fakeUser = {
 };
 
 export const fakeDashboardData = {
-  todayConsumption: 18.7,
+  monthlyConsumption: 18.7,
   currentBalance: 85,
   meterStatus: 'Online',
   lowBalanceWarning: 'Your prepaid balance is getting low. Please recharge soon.',
