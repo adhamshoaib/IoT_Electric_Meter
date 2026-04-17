@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include "esp_check.h"
 #include "esp_adc/adc_continuous.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 
 #define ADC_SAMPLE_RATE_HZ 20000
 #define CYCLES_PER_WINDOW 4
@@ -22,6 +24,8 @@ typedef struct
     bool running;
     uint8_t *raw_buf;
     adc_continuous_handle_t handle;
+    adc_cali_handle_t cali_handle;
+    bool cali_enabled;
 } adc_driver_t;
 
 #define NUM_CHANNELS 2
@@ -30,7 +34,56 @@ static const adc_channel_t channels[NUM_CHANNELS] = {ADC_CHANNEL_6, ADC_CHANNEL_
 #define CURRENT_CHANNEL_IDX 1
 
 static adc_driver_t adc_driver = {0};
+
 static const char *TAG = "ADC_DRIVER";
+
+static esp_err_t adc_driver_cali_init(void)
+{
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,   // must match channel config
+        .bitwidth = ADC_BITWIDTH_12 // must match channel config
+        // .default_vref = 0 (optional; 0 => use eFuse)
+    };
+    ESP_RETURN_ON_ERROR(adc_cali_create_scheme_line_fitting(&cali_cfg, &adc_driver.cali_handle), TAG, "adc_cali_create_scheme_line_fitting failed");
+
+    adc_driver.cali_enabled = true;
+    return ESP_OK;
+}
+
+static esp_err_t adc_driver_raw_to_mv(uint16_t raw, int *mv_out)
+{
+    if (!adc_driver.cali_enabled || adc_driver.cali_handle == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int mv = 0;
+    esp_err_t ret = adc_cali_raw_to_voltage(adc_driver.cali_handle, raw, &mv);
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+    *mv_out = mv;
+    return ESP_OK;
+}
+
+static void adc_driver_cali_deinit(void)
+{
+    if (!adc_driver.cali_enabled || adc_driver.cali_handle == NULL)
+    {
+        return;
+    }
+
+    esp_err_t ret = adc_cali_delete_scheme_line_fitting(adc_driver.cali_handle);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "adc_cali_delete_scheme_line_fitting failed: %s", esp_err_to_name(ret));
+    }
+
+    adc_driver.cali_handle = NULL;
+    adc_driver.cali_enabled = false;
+}
 
 esp_err_t adc_driver_init(void)
 {
@@ -68,6 +121,14 @@ esp_err_t adc_driver_init(void)
         goto cleanup_handle;
     }
 
+    // calibration
+    ret = adc_driver_cali_init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "adc_driver_cali_init failed: %s", esp_err_to_name(ret));
+        goto cleanup_handle;
+    }
+
     adc_driver.raw_buf = malloc(ADC_FRAME_SIZE);
     if (adc_driver.raw_buf == NULL)
     {
@@ -81,6 +142,7 @@ esp_err_t adc_driver_init(void)
     return ESP_OK;
 
 cleanup_handle:
+    adc_driver_cali_deinit();
     adc_continuous_deinit(adc_driver.handle);
     if (adc_driver.raw_buf != NULL)
     {
@@ -97,9 +159,14 @@ esp_err_t adc_driver_deinit(void)
         return ESP_ERR_INVALID_STATE;
 
     if (adc_driver.running)
-        ESP_RETURN_ON_ERROR(adc_driver_stop(), TAG, "adc_driver_stop failed");
+    {
+        esp_err_t stop_ret = adc_driver_stop();
+        if (stop_ret != ESP_OK)
+            ESP_LOGW(TAG, "adc_driver_stop failed during deinit: %s", esp_err_to_name(stop_ret));
+    }
 
     esp_err_t ret = adc_continuous_deinit(adc_driver.handle);
+    adc_driver_cali_deinit();
 
     adc_driver.handle = NULL;
     free(adc_driver.raw_buf);
@@ -158,47 +225,55 @@ esp_err_t adc_driver_read(adc_sample_pair_t *out, size_t max_count, size_t *out_
     if (ret != ESP_OK)
         return ret;
 
-    size_t v_count = 0;
-    size_t i_count = 0;
     uint32_t frame_count = bytes_read / sizeof(adc_digi_output_data_t);
 
-    for (uint32_t i = 0; i < frame_count; i++)
+    size_t pairs_written = 0;
+    bool pair_started = false;
+
+    for (uint32_t i = 0; i < frame_count && pairs_written < max_count; i++)
     {
         adc_digi_output_data_t *frame = (adc_digi_output_data_t *)&adc_driver.raw_buf[i * sizeof(adc_digi_output_data_t)];
         uint8_t ch = frame->type1.channel;
         uint16_t data = frame->type1.data;
 
-        if (ch == channels[VOLTAGE_CHANNEL_IDX] && v_count < max_count)
+        if (ch == channels[VOLTAGE_CHANNEL_IDX])
         {
-            out[v_count].v_raw = data;
-            v_count++;
+            int mv = 0;
+            esp_err_t mv_ret = adc_driver_raw_to_mv(data, &mv);
+            if (mv_ret != ESP_OK)
+            {
+                return mv_ret;
+            }
+            out[pairs_written].v_raw = data;
+            out[pairs_written].v_mv = mv;
+            pair_started = true;
         }
-        else if (ch == channels[CURRENT_CHANNEL_IDX] && i_count < max_count)
+
+        else if (ch == channels[CURRENT_CHANNEL_IDX] && pair_started)
         {
-            out[i_count].i_raw = data;
-            i_count++;
+            int mv = 0;
+            esp_err_t mv_ret = adc_driver_raw_to_mv(data, &mv);
+            if (mv_ret != ESP_OK)
+            {
+                return mv_ret;
+            }
+            out[pairs_written].i_raw = data;
+            out[pairs_written].i_mv = mv;
+            pairs_written++;
+            pair_started = false;
         }
         else
         {
-            ESP_LOGW(TAG, "Unexpected channel ID %d in DMA frame, skipping", ch);
+            ESP_LOGD(TAG, "Unexpected channel ID %d in DMA frame, skipping", ch);
         }
     }
-
-    // Zip: only pairs where both channels delivered a sample are valid
-    size_t pairs = (v_count < i_count) ? v_count : i_count;
-
-    if (v_count != i_count)
-    {
-        ESP_LOGW(TAG, "Channel sample count mismatch: V=%zu I=%zu, truncating to %zu pairs",
-                 v_count, i_count, pairs);
-    }
-
-    if (pairs == 0)
+    if (pairs_written == 0)
     {
         ESP_LOGW(TAG, "No complete pairs formed from %" PRIu32 " bytes read", bytes_read);
         return ESP_ERR_INVALID_RESPONSE;
     }
-    *out_count = pairs;
+
+    *out_count = pairs_written;
 
     return ESP_OK;
 }

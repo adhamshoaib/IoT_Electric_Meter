@@ -44,6 +44,8 @@ typedef struct
 {
     uint16_t v_raw; /**< Voltage channel raw ADC count. */
     uint16_t i_raw; /**< Current channel raw ADC count. */
+    int32_t v_mv;
+    int32_t i_mv;
 } adc_sample_pair_t;
 
 /* ------------------------------------------------------------------ */

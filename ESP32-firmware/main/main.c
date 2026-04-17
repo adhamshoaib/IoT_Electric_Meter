@@ -11,7 +11,7 @@
 
 #define TEST_DURATION_S 120
 #define REPORT_INTERVAL_MS 5000 // less spam
-#define READ_BUF_LEN 256        // smaller, safer
+#define READ_BUF_LEN 1024       // keep above max pairs/read to avoid truncation bias
 #define READ_TIMEOUT_MS 200
 #define WARMUP_MS 1000
 
@@ -23,18 +23,18 @@ typedef struct
     uint64_t n;
     double mean;
     double m2;
-    uint16_t min;
-    uint16_t max;
+    int32_t min;
+    int32_t max;
 } ch_stats_t;
 static void stats_reset(ch_stats_t *s)
 {
     s->n = 0;
     s->mean = 0.0;
     s->m2 = 0.0;
-    s->min = UINT16_MAX;
-    s->max = 0;
+    s->min = INT32_MAX;
+    s->max = INT32_MIN;
 }
-static void stats_add(ch_stats_t *s, uint16_t x)
+static void stats_add(ch_stats_t *s, int32_t x)
 {
     s->n++;
     if (x < s->min)
@@ -52,21 +52,30 @@ static double stats_stddev(const ch_stats_t *s)
         return 0.0;
     return sqrt(s->m2 / (double)(s->n - 1));
 }
-static uint16_t stats_p2p(const ch_stats_t *s)
+static int32_t stats_p2p(const ch_stats_t *s)
 {
     if (s->n == 0)
         return 0;
-    return (uint16_t)(s->max - s->min);
+    return s->max - s->min;
 }
 static void print_stats(const char *label, const ch_stats_t *s)
 {
-    ESP_LOGI(TAG, "%s n=%" PRIu64 " mean=%.2f std=%.2f p2p=%u min=%u max=%u",
+    ESP_LOGI(TAG, "%s n=%" PRIu64 " mean=%.2f std=%.2f p2p=%" PRIi32 " min=%" PRIi32 " max=%" PRIi32,
              label, s->n, s->mean, stats_stddev(s), stats_p2p(s), s->min, s->max);
 }
 void app_main(void)
 {
     size_t count = 0;
     ch_stats_t v_total, i_total, v_sec, i_sec;
+    uint64_t read_timeout_total = 0;
+    uint64_t invalid_frame_total = 0;
+    uint64_t read_timeout_sec = 0;
+    uint64_t invalid_frame_sec = 0;
+    uint64_t pairs_total = 0;
+    uint64_t pairs_sec = 0;
+    uint64_t full_buffer_reads_total = 0;
+    uint64_t full_buffer_reads_sec = 0;
+
     stats_reset(&v_total);
     stats_reset(&i_total);
     stats_reset(&v_sec);
@@ -74,10 +83,8 @@ void app_main(void)
     esp_log_level_set("ADC_DRIVER", ESP_LOG_ERROR); // suppress warning flood
     ESP_ERROR_CHECK(adc_driver_init());
     ESP_ERROR_CHECK(adc_driver_start());
-    int64_t t0 = esp_timer_get_time();
-    int64_t warmup_end = t0 + (int64_t)WARMUP_MS * 1000;
-    int64_t test_end = t0 + (int64_t)TEST_DURATION_S * 1000000;
-    int64_t next_report = t0 + (int64_t)REPORT_INTERVAL_MS * 1000;
+    int64_t warmup_start = esp_timer_get_time();
+    int64_t warmup_end = warmup_start + (int64_t)WARMUP_MS * 1000;
     while (esp_timer_get_time() < warmup_end)
     {
         esp_err_t ret = adc_driver_read(s_buf, READ_BUF_LEN, &count, READ_TIMEOUT_MS);
@@ -86,42 +93,95 @@ void app_main(void)
             ESP_LOGW(TAG, "Warmup read: %s", esp_err_to_name(ret));
         }
     }
-    ESP_LOGI(TAG, "Starting noise capture for %d s...", TEST_DURATION_S);
+    int64_t test_start = esp_timer_get_time();
+    int64_t test_end = test_start + (int64_t)TEST_DURATION_S * 1000000;
+    int64_t next_report = test_start + (int64_t)REPORT_INTERVAL_MS * 1000;
+    ESP_LOGI(TAG, "Starting calibrated noise capture for %d s...", TEST_DURATION_S);
     while (esp_timer_get_time() < test_end)
     {
         esp_err_t ret = adc_driver_read(s_buf, READ_BUF_LEN, &count, READ_TIMEOUT_MS);
-        if (ret == ESP_ERR_TIMEOUT || ret == ESP_ERR_INVALID_RESPONSE)
+        if (ret == ESP_ERR_TIMEOUT)
         {
-            continue; // non-fatal
+            read_timeout_total++;
+            read_timeout_sec++;
         }
-        if (ret != ESP_OK)
+        else if (ret == ESP_ERR_INVALID_RESPONSE)
+        {
+            invalid_frame_total++;
+            invalid_frame_sec++;
+        }
+        else if (ret != ESP_OK)
         {
             ESP_LOGW(TAG, "ADC read error: %s", esp_err_to_name(ret));
             vTaskDelay(pdMS_TO_TICKS(10));
-            continue; // do NOT reset
         }
-        for (size_t k = 0; k < count; k++)
+        else
         {
-            stats_add(&v_total, s_buf[k].v_raw);
-            stats_add(&i_total, s_buf[k].i_raw);
-            stats_add(&v_sec, s_buf[k].v_raw);
-            stats_add(&i_sec, s_buf[k].i_raw);
+            pairs_total += count;
+            pairs_sec += count;
+            if (count == READ_BUF_LEN)
+            {
+                full_buffer_reads_total++;
+                full_buffer_reads_sec++;
+            }
+
+            for (size_t k = 0; k < count; k++)
+            {
+                stats_add(&v_total, s_buf[k].v_mv);
+                stats_add(&v_sec, s_buf[k].v_mv);
+                stats_add(&i_total, s_buf[k].i_mv);
+                stats_add(&i_sec, s_buf[k].i_mv);
+            }
         }
+
         int64_t now = esp_timer_get_time();
         if (now >= next_report)
         {
-            int64_t elapsed_s = (now - t0) / 1000000;
+            int64_t elapsed_s = (now - test_start) / 1000000;
             ESP_LOGI(TAG, "t=%" PRIi64 "s", elapsed_s);
-            print_stats("V(sec)", &v_sec);
-            print_stats("I(sec)", &i_sec);
+            print_stats("V(sec,mV)", &v_sec);
+            print_stats("I(sec,mV)", &i_sec);
+            ESP_LOGI(TAG, "Throughput: pairs=%" PRIu64 " (%.1f pairs/s)",
+                     pairs_sec, (double)pairs_sec * 1000.0 / (double)REPORT_INTERVAL_MS);
+            if (full_buffer_reads_sec > 0)
+            {
+                ESP_LOGW(TAG, "Read buffer filled %" PRIu64 " times this interval; results may be truncated",
+                         full_buffer_reads_sec);
+            }
+            if (read_timeout_sec > 0 || invalid_frame_sec > 0)
+            {
+                ESP_LOGW(TAG, "Read retries this interval: timeout=%" PRIu64 " incomplete_pairs=%" PRIu64,
+                         read_timeout_sec, invalid_frame_sec);
+            }
+
             stats_reset(&v_sec);
             stats_reset(&i_sec);
+            pairs_sec = 0;
+            full_buffer_reads_sec = 0;
+            read_timeout_sec = 0;
+            invalid_frame_sec = 0;
             next_report += (int64_t)REPORT_INTERVAL_MS * 1000;
         }
     }
     ESP_LOGI(TAG, "Final results:");
-    print_stats("V(total)", &v_total);
-    print_stats("I(total)", &i_total);
+    print_stats("V(total,mV)", &v_total);
+    print_stats("I(total,mV)", &i_total);
+    double total_duration_s = (double)(esp_timer_get_time() - test_start) / 1000000.0;
+    ESP_LOGI(TAG, "Captured pairs=%" PRIu64 " over %.2f s (%.1f pairs/s)",
+             pairs_total,
+             total_duration_s,
+             (total_duration_s > 0.0) ? ((double)pairs_total / total_duration_s) : 0.0);
+    if (full_buffer_reads_total > 0)
+    {
+        ESP_LOGW(TAG, "Read buffer filled %" PRIu64 " times total; increase READ_BUF_LEN if this persists",
+                 full_buffer_reads_total);
+    }
+    if (read_timeout_total > 0 || invalid_frame_total > 0)
+    {
+        ESP_LOGW(TAG, "Total read retries: timeout=%" PRIu64 " incomplete_pairs=%" PRIu64,
+                 read_timeout_total, invalid_frame_total);
+    }
+
     ESP_ERROR_CHECK(adc_driver_stop());
     ESP_ERROR_CHECK(adc_driver_deinit());
     ESP_LOGI(TAG, "Done.");
