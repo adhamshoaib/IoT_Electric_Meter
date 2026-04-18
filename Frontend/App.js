@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { fakeUser, fakeDashboardData } from './services/fakedata';
+import StatisticsScreen from './screens/StatisticsScreen';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -75,6 +76,8 @@ export default function App() {
     data={fakeDashboardData}
     onOpenProfile={() => setActiveTab('profile')}
   />
+   ) : activeTab === 'statistics' ? (
+        <StatisticsScreen />
 ) : (
   <ProfileScreen
     user={fakeUser}
@@ -106,6 +109,28 @@ export default function App() {
       Home
     </Text>
   </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.tabButton,
+            activeTab === 'statistics' && styles.activeTabButton,
+          ]}
+          onPress={() => setActiveTab('statistics')}
+        >
+          <Ionicons
+            name="stats-chart"
+            size={20}
+            color={activeTab === 'statistics' ? '#0f766e' : '#64748b'}
+          />
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === 'statistics' && styles.activeTabText,
+            ]}
+          >
+            Stats
+          </Text>
+        </TouchableOpacity>
 
   <TouchableOpacity
     style={[
