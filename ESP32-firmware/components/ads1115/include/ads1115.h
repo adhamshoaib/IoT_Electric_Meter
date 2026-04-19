@@ -289,7 +289,7 @@ int16_t ads1115_differential_1_3(ads1115_t *ads);
  *        - The signed 16-bit raw conversion result (range: -32768 to 32767).
  *        - 0 if a communication error occurs.
  */
-int16_t ads1115_differential_1_3(ads1115_t *ads);
+int16_t ads1115_differential_2_3(ads1115_t *ads);
 
 /**
  * @brief Converts a raw ADC value to a voltage in Volts.
