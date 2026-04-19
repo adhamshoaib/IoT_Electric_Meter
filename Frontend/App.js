@@ -14,7 +14,7 @@ import { fakeUser, fakeDashboardData } from './services/fakedata';
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeScreen, setActiveScreen] = useState('dashboard');
   const [email, setEmail] = useState('omar@example.com');
   const [password, setPassword] = useState('123456');
 
@@ -67,72 +67,69 @@ export default function App() {
     );
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-     {activeTab === 'dashboard' ? (
-  <DashboardScreen
-    user={fakeUser}
-    data={fakeDashboardData}
-    onOpenProfile={() => setActiveTab('profile')}
-  />
-) : (
-  <ProfileScreen
-    user={fakeUser}
-    onLogout={() => {
-      setIsLoggedIn(false);
-      setActiveTab('dashboard');
-    }}
-  />
-)}
-<View style={styles.tabBar}>
-  <TouchableOpacity
-    style={[
-      styles.tabButton,
-      activeTab === 'dashboard' && styles.activeTabButton,
-    ]}
-    onPress={() => setActiveTab('dashboard')}
-  >
-    <Ionicons
-      name="home"
-      size={20}
-      color={activeTab === 'dashboard' ? '#0f766e' : '#64748b'}
-    />
-    <Text
-      style={[
-        styles.tabText,
-        activeTab === 'dashboard' && styles.activeTabText,
-      ]}
-    >
-      Home
-    </Text>
-  </TouchableOpacity>
+return (
+  <SafeAreaView style={styles.container}>
+    {activeScreen === 'dashboard' && (
+      <DashboardScreen
+        user={fakeUser}
+        data={fakeDashboardData}
+        onOpenSettings={() => setActiveScreen('settings')}
+      />
+    )}
 
-  <TouchableOpacity
-    style={[
-      styles.tabButton,
-      activeTab === 'profile' && styles.activeTabButton,
-    ]}
-    onPress={() => setActiveTab('profile')}
-  >
-    <Ionicons
-      name="person"
-      size={20}
-      color={activeTab === 'profile' ? '#0f766e' : '#64748b'}
-    />
-    <Text
-      style={[
-        styles.tabText,
-        activeTab === 'profile' && styles.activeTabText,
-      ]}
-    >
-      Profile
-    </Text>
-  </TouchableOpacity>
-</View>
-    </SafeAreaView>
-  );
+    {activeScreen === 'settings' && (
+      <SettingsScreen
+        onBack={() => setActiveScreen('dashboard')}
+        onOpenProfile={() => setActiveScreen('profile')}
+        onOpenBilling={() => setActiveScreen('billing')}
+        onLogout={() => {
+          setIsLoggedIn(false);
+          setActiveScreen('dashboard');
+        }}
+      />
+    )}
+
+    {activeScreen === 'profile' && (
+      <ProfileScreen
+        user={fakeUser}
+        onBack={() => setActiveScreen('settings')}
+      />
+    )}
+
+    {activeScreen === 'billing' && (
+      <BillingScreen
+        data={fakeDashboardData}
+        onBack={() => setActiveScreen('settings')}
+      />
+    )}
+
+    <View style={styles.tabBar}>
+      <TouchableOpacity
+        style={[
+          styles.tabButton,
+          activeScreen === 'dashboard' && styles.activeTabButton,
+        ]}
+        onPress={() => setActiveScreen('dashboard')}
+      >
+        <Ionicons
+          name="home"
+          size={20}
+          color={activeScreen === 'dashboard' ? '#0f766e' : '#64748b'}
+        />
+        <Text
+          style={[
+            styles.tabText,
+            activeScreen === 'dashboard' && styles.activeTabText,
+          ]}
+        >
+          Home
+        </Text>
+      </TouchableOpacity>
+    </View>
+  </SafeAreaView>
+);
 }
-function DashboardScreen({ user, data, onOpenProfile  }) {
+function DashboardScreen({ user, data, onOpenSettings   }) {
   const consumptionValue =
     data.monthlyConsumption ?? data.todayConsumption ?? 412;
 
@@ -149,7 +146,7 @@ function DashboardScreen({ user, data, onOpenProfile  }) {
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.headerAvatar} onPress={onOpenProfile}>
+        <TouchableOpacity style={styles.headerAvatar} onPress={onOpenSettings}>
   <Text style={styles.headerAvatarText}>{user.name.charAt(0)}</Text>
 </TouchableOpacity>
       </View>
@@ -229,13 +226,209 @@ function DashboardScreen({ user, data, onOpenProfile  }) {
     </ScrollView>
   );
 }
-
-function ProfileScreen({ user, onLogout }) {
+function SettingsScreen({ onBack, onOpenProfile, onOpenBilling, onLogout }) {
   return (
     <ScrollView
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
     >
+      <View style={styles.pageTopRow}>
+        <TouchableOpacity style={styles.backButton} onPress={onBack}>
+          <Ionicons name="chevron-back" size={22} color="#0f172a" />
+        </TouchableOpacity>
+
+        <Text style={styles.pageTitle}>Settings</Text>
+
+        <View style={styles.topSpacer} />
+      </View>
+
+      <View style={styles.sectionCard}>
+        <SettingsRow
+          icon="person-outline"
+          title="Profile"
+          subtitle="View account and meter details"
+          onPress={onOpenProfile}
+        />
+
+        <SettingsRow
+          icon="card-outline"
+          title="Billing"
+          subtitle="View payments and monthly estimate"
+          onPress={onOpenBilling}
+          lastItem
+        />
+      </View>
+
+      <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
+        <Text style={styles.logoutButtonText}>Logout</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+function SettingsRow({ icon, title, subtitle, onPress, lastItem }) {
+  return (
+    <TouchableOpacity
+      style={[styles.settingsRow, lastItem && styles.settingsRowLast]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
+      <View style={styles.settingsRowLeft}>
+        <View style={styles.settingsIconWrap}>
+          <Ionicons name={icon} size={20} color="#0f766e" />
+        </View>
+
+        <View style={styles.settingsTextWrap}>
+          <Text style={styles.settingsRowTitle}>{title}</Text>
+          <Text style={styles.settingsRowSubtitle}>{subtitle}</Text>
+        </View>
+      </View>
+
+      <Ionicons name="chevron-forward" size={18} color="#94a3b8" />
+    </TouchableOpacity>
+  );
+}
+function PaymentMethodCard({ icon, title, subtitle, tag }) {
+  return (
+    <TouchableOpacity style={styles.paymentMethodCard} activeOpacity={0.85}>
+      <View style={styles.paymentMethodLeft}>
+        <View style={styles.paymentMethodIconWrap}>
+          <Ionicons name={icon} size={22} color="#0f766e" />
+        </View>
+
+        <View style={styles.paymentMethodTextWrap}>
+          <Text style={styles.paymentMethodTitle}>{title}</Text>
+          <Text style={styles.paymentMethodSubtitle}>{subtitle}</Text>
+        </View>
+      </View>
+
+      <View style={styles.paymentMethodTag}>
+        <Text style={styles.paymentMethodTagText}>{tag}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+function BillingScreen({ data, onBack }) {
+  const estimatedCost = data.estimatedCost ?? 238;
+  const currentBalance = data.currentBalance ?? 120;
+  const lastTopUpAmount = data.lastTopUp?.amount ?? 200;
+  const lastTopUpDate = data.lastTopUp?.date ?? '10 Apr 2026';
+
+  const paymentHistory = data.paymentHistory ?? [
+    { id: '1', date: '10 Apr 2026', method: 'Bank Card', amount: 200 },
+    { id: '2', date: '02 Apr 2026', method: 'Mobile Wallet', amount: 150 },
+    { id: '3', date: '25 Mar 2026', method: 'Cash Payment', amount: 100 },
+  ];
+
+  return (
+    <ScrollView
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.pageTopRow}>
+        <TouchableOpacity style={styles.backButton} onPress={onBack}>
+          <Ionicons name="chevron-back" size={22} color="#0f172a" />
+        </TouchableOpacity>
+
+        <Text style={styles.pageTitle}>Billing</Text>
+
+        <View style={styles.topSpacer} />
+      </View>
+
+      <View style={styles.billingSummaryCard}>
+        <Text style={styles.billingEyebrow}>THIS MONTH</Text>
+        <Text style={styles.billingMainValue}>{estimatedCost} EGP</Text>
+        <Text style={styles.billingSummaryText}>
+          Estimated cost based on current monthly consumption
+        </Text>
+
+        <View style={styles.billingStatsRow}>
+          <View style={styles.billingStatItem}>
+            <Text style={styles.billingStatLabel}>Current Balance</Text>
+            <Text style={styles.billingStatValue}>{currentBalance} EGP</Text>
+          </View>
+
+          <View style={styles.billingStatItem}>
+            <Text style={styles.billingStatLabel}>Last Top-Up</Text>
+            <Text style={styles.billingStatValue}>{lastTopUpAmount} EGP</Text>
+            <Text style={styles.billingStatSubtext}>{lastTopUpDate}</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={[styles.sectionCard, styles.sectionCardSpacing]}>
+        <Text style={styles.sectionTitle}>Payment Methods</Text>
+        <Text style={styles.billingSectionHint}>
+          Choose how you would like to pay or recharge your balance
+        </Text>
+
+        <PaymentMethodCard
+          icon="card-outline"
+          title="Bank Card"
+          subtitle="Pay using your debit or credit card"
+          tag="Instant"
+        />
+
+        <PaymentMethodCard
+          icon="phone-portrait-outline"
+          title="Mobile Wallet"
+          subtitle="Use your wallet app for quick payment"
+          tag="Fast"
+        />
+
+        <PaymentMethodCard
+          icon="cash-outline"
+          title="Cash Payment"
+          subtitle="Pay at a recharge point or service outlet"
+          tag="In Person"
+        />
+
+        <View style={styles.demoNote}>
+          <Text style={styles.demoNoteText}>
+            Payment methods are shown here for the project UI demo.
+          </Text>
+        </View>
+      </View>
+
+      <View style={[styles.sectionCard, styles.sectionCardSpacing]}>
+        <Text style={styles.sectionTitle}>Recent Payments</Text>
+
+        {paymentHistory.map((item, index) => (
+          <View
+            key={item.id}
+            style={[
+              styles.paymentRow,
+              index === paymentHistory.length - 1 && styles.paymentRowLast,
+            ]}
+          >
+            <View>
+              <Text style={styles.paymentDate}>{item.date}</Text>
+              <Text style={styles.paymentMethod}>{item.method}</Text>
+            </View>
+
+            <Text style={styles.paymentAmount}>{item.amount} EGP</Text>
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+function ProfileScreen({ user, onBack }) {
+  return (
+    <ScrollView
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.pageTopRow}>
+        <TouchableOpacity style={styles.backButton} onPress={onBack}>
+          <Ionicons name="chevron-back" size={22} color="#0f172a" />
+        </TouchableOpacity>
+
+        <Text style={styles.pageTitle}>Profile</Text>
+
+        <View style={styles.topSpacer} />
+      </View>
+
       <View style={styles.profileHero}>
         <View style={styles.profileAvatar}>
           <Text style={styles.profileAvatarText}>{user.name.charAt(0)}</Text>
@@ -245,20 +438,18 @@ function ProfileScreen({ user, onLogout }) {
         <Text style={styles.profileEmail}>{user.email}</Text>
       </View>
 
-      <View style={styles.profileCard}>
+      <View style={styles.sectionCard}>
         <Text style={styles.sectionTitle}>Account Info</Text>
 
         <ProfileRow label="Meter ID" value={user.meterId} />
         <ProfileRow label="Account Number" value={user.accountNumber} />
         <ProfileRow label="Address" value={user.address} lastItem />
       </View>
-
-      <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
-        <Text style={styles.logoutButtonText}>Logout</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
+
+
 
 function ProfileRow({ label, value, lastItem }) {
   return (
@@ -274,6 +465,80 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f4f7fb',
   },
+  pageTopRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 20,
+},
+backButton: {
+  width: 42,
+  height: 42,
+  borderRadius: 21,
+  backgroundColor: '#ffffff',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderWidth: 1,
+  borderColor: '#e2e8f0',
+},
+pageTitle: {
+  fontSize: 24,
+  fontWeight: '800',
+  color: '#0f172a',
+},
+topSpacer: {
+  width: 42,
+},
+sectionCard: {
+  backgroundColor: '#ffffff',
+  borderRadius: 24,
+  padding: 18,
+  shadowColor: '#0f172a',
+  shadowOpacity: 0.05,
+  shadowRadius: 14,
+  shadowOffset: { width: 0, height: 8 },
+  elevation: 3,
+},
+settingsRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingVertical: 16,
+  borderBottomWidth: 1,
+  borderBottomColor: '#eef2f7',
+},
+settingsRowLast: {
+  borderBottomWidth: 0,
+},
+settingsRowLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flex: 1,
+  marginRight: 12,
+},
+settingsIconWrap: {
+  width: 42,
+  height: 42,
+  borderRadius: 21,
+  backgroundColor: '#ecfdf5',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginRight: 12,
+},
+settingsTextWrap: {
+  flex: 1,
+},
+settingsRowTitle: {
+  fontSize: 16,
+  fontWeight: '700',
+  color: '#0f172a',
+  marginBottom: 4,
+},
+settingsRowSubtitle: {
+  fontSize: 13,
+  color: '#64748b',
+  lineHeight: 18,
+},
 
   scrollContent: {
     padding: 20,
@@ -758,4 +1023,193 @@ warningText: {
   activeTabText: {
     color: '#0f766e',
   },
+  tabBar: {
+  position: 'absolute',
+  left: 16,
+  right: 16,
+  bottom: 16,
+  flexDirection: 'row',
+  backgroundColor: '#ffffff',
+  borderRadius: 22,
+  padding: 8,
+  shadowColor: '#0f172a',
+  shadowOpacity: 0.08,
+  shadowRadius: 14,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 5,
+},
+tabButton: {
+  flex: 1,
+  borderRadius: 14,
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingVertical: 12,
+},
+activeTabButton: {
+  backgroundColor: '#ecfdf5',
+},
+tabText: {
+  fontSize: 14,
+  fontWeight: '700',
+  color: '#64748b',
+},
+activeTabText: {
+  color: '#0f766e',
+},
+sectionCardSpacing: {
+  marginTop: 16,
+},
+
+billingSummaryCard: {
+  backgroundColor: '#0f766e',
+  borderRadius: 28,
+  padding: 22,
+  marginBottom: 16,
+  shadowColor: '#0f766e',
+  shadowOpacity: 0.18,
+  shadowRadius: 20,
+  shadowOffset: { width: 0, height: 10 },
+  elevation: 6,
+},
+billingEyebrow: {
+  color: '#ccfbf1',
+  fontSize: 12,
+  fontWeight: '800',
+  letterSpacing: 0.8,
+  marginBottom: 10,
+},
+billingMainValue: {
+  color: '#ffffff',
+  fontSize: 42,
+  fontWeight: '900',
+},
+billingSummaryText: {
+  color: '#d1fae5',
+  fontSize: 14,
+  lineHeight: 20,
+  marginTop: 8,
+  marginBottom: 18,
+},
+billingStatsRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+},
+billingStatItem: {
+  width: '48%',
+  backgroundColor: 'rgba(255,255,255,0.14)',
+  borderRadius: 18,
+  padding: 14,
+},
+billingStatLabel: {
+  color: '#ccfbf1',
+  fontSize: 12,
+  marginBottom: 6,
+},
+billingStatValue: {
+  color: '#ffffff',
+  fontSize: 18,
+  fontWeight: '800',
+},
+billingStatSubtext: {
+  color: '#ccfbf1',
+  fontSize: 12,
+  marginTop: 6,
+},
+
+billingSectionHint: {
+  fontSize: 13,
+  color: '#64748b',
+  lineHeight: 19,
+  marginBottom: 12,
+},
+
+paymentMethodCard: {
+  backgroundColor: '#f8fafc',
+  borderRadius: 18,
+  padding: 14,
+  marginTop: 12,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+paymentMethodLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flex: 1,
+  marginRight: 12,
+},
+paymentMethodIconWrap: {
+  width: 46,
+  height: 46,
+  borderRadius: 23,
+  backgroundColor: '#ecfdf5',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginRight: 12,
+},
+paymentMethodTextWrap: {
+  flex: 1,
+},
+paymentMethodTitle: {
+  fontSize: 16,
+  fontWeight: '800',
+  color: '#0f172a',
+  marginBottom: 4,
+},
+paymentMethodSubtitle: {
+  fontSize: 13,
+  color: '#64748b',
+  lineHeight: 18,
+},
+paymentMethodTag: {
+  backgroundColor: '#dcfce7',
+  borderRadius: 999,
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+},
+paymentMethodTagText: {
+  fontSize: 11,
+  fontWeight: '800',
+  color: '#166534',
+},
+
+demoNote: {
+  marginTop: 14,
+  backgroundColor: '#ecfdf5',
+  borderRadius: 16,
+  padding: 12,
+},
+demoNoteText: {
+  fontSize: 12,
+  lineHeight: 18,
+  color: '#0f766e',
+  fontWeight: '600',
+},
+
+paymentRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  paddingVertical: 16,
+  borderBottomWidth: 1,
+  borderBottomColor: '#eef2f7',
+},
+paymentRowLast: {
+  borderBottomWidth: 0,
+},
+paymentDate: {
+  fontSize: 15,
+  fontWeight: '700',
+  color: '#0f172a',
+},
+paymentMethod: {
+  fontSize: 13,
+  color: '#64748b',
+  marginTop: 4,
+},
+paymentAmount: {
+  fontSize: 16,
+  fontWeight: '800',
+  color: '#0f766e',
+},
 });
