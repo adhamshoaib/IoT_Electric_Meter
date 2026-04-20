@@ -6,7 +6,7 @@ static const char *TAG = "SMART_METER";
 esp_err_t firebase_post(time_t ts, float energy_kwh)
 {
     const char *url =
-        "https://test2-8c525-default-rtdb.europe-west1.firebasedatabase.app/test/last.json";
+        "https://sem-rtdb-backend.onrender.com/reading";
 
     char payload[128];
     snprintf(payload, sizeof(payload),
@@ -21,7 +21,7 @@ esp_err_t firebase_post(time_t ts, float energy_kwh)
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
-    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "x-api-key", "sem-prod-x7k9m2p4q8");
     esp_http_client_set_post_field(client, payload, strlen(payload));
 
     esp_err_t err = esp_http_client_perform(client);

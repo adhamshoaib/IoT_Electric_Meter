@@ -1,0 +1,3 @@
+# Intentionally empty.
+# Placeholder file kept so stale build-generated kconfig include lists
+# referencing main/Kconfig.projbuild do not fail.
