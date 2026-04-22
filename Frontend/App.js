@@ -25,12 +25,11 @@ useEffect(() => {
 
   const unsubscribe = onValue(meterRef, (snapshot) => {
     const firebaseData = snapshot.val();
-    console.log('Firebase data:', firebaseData);
 
     if (firebaseData) {
       setLiveDashboardData((prev) => ({
         ...prev,
-        liveReading: firebaseData.energy_kwh ?? prev.liveReading,
+        monthlyConsumption: firebaseData.energy_kwh ?? prev.monthlyConsumption,
         lastSync: firebaseData.ts ? String(firebaseData.ts) : 'Just now',
       }));
     }
@@ -126,7 +125,7 @@ useEffect(() => {
 
       {activeScreen === 'billing' && (
         <BillingScreen
-          data={liveDashboardDataDashboardData}
+          data={liveDashboardData}
           onBack={() => setActiveScreen('settings')}
         />
       )}
@@ -221,8 +220,10 @@ function DashboardScreen({ user, data, onOpenSettings }) {
           <Text style={styles.heroUnit}>kWh</Text>
         </View>
 
-        <Text style={styles.heroNote}>
-          Your total electricity consumption for the current month
+        <Text style={styles.heroNote}>Updated from meter reading</Text>
+
+        <Text style={styles.heroMetaText}>
+          Last sync: {data.lastSync ?? 'Just now'}
         </Text>
       </View>
 
@@ -238,15 +239,6 @@ function DashboardScreen({ user, data, onOpenSettings }) {
           <Text style={styles.balanceMiniPillText}>Prepaid Meter</Text>
         </View>
       </View>
-      <View style={styles.liveReadingCard}>
-  <Text style={styles.liveReadingTitle}>Live Reading</Text>
-  <Text style={styles.liveReadingValue}>
-    {data.liveReading ?? 0} kWh
-  </Text>
-  <Text style={styles.liveReadingSubtitle}>
-    Last updated: {data.lastSync ?? 'Just now'}
-  </Text>
-</View>
 
       <View style={styles.billingPreviewCard}>
         <View style={styles.billingPreviewHeader}>
@@ -1318,31 +1310,11 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: '#0f766e',
   },
-  liveReadingCard: {
-  backgroundColor: '#ffffff',
-  borderRadius: 24,
-  padding: 18,
-  marginBottom: 20,
-  shadowColor: '#0f172a',
-  shadowOpacity: 0.05,
-  shadowRadius: 14,
-  shadowOffset: { width: 0, height: 8 },
-  elevation: 3,
-},
-liveReadingTitle: {
-  fontSize: 14,
-  color: '#64748b',
-  marginBottom: 8,
-  fontWeight: '600',
-},
-liveReadingValue: {
-  fontSize: 28,
-  fontWeight: '800',
-  color: '#0f172a',
-},
-liveReadingSubtitle: {
+  
+heroMetaText: {
+  color: '#ccfbf1',
   fontSize: 13,
-  color: '#94a3b8',
-  marginTop: 6,
+  marginTop: 10,
+  fontWeight: '600',
 },
 });
