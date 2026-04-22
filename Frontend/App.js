@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { ref, onValue } from 'firebase/database';
+import { database } from './services/firebase';
 import {
   SafeAreaView,
   View,
@@ -17,6 +19,25 @@ export default function App() {
   const [activeScreen, setActiveScreen] = useState('dashboard');
   const [email, setEmail] = useState('omar@example.com');
   const [password, setPassword] = useState('123456');
+  const [liveDashboardData, setLiveDashboardData] = useState(fakeDashboardData);
+useEffect(() => {
+  const meterRef = ref(database, 'current_reading');
+
+  const unsubscribe = onValue(meterRef, (snapshot) => {
+    const firebaseData = snapshot.val();
+    console.log('Firebase data:', firebaseData);
+
+    if (firebaseData) {
+      setLiveDashboardData((prev) => ({
+        ...prev,
+        liveReading: firebaseData.energy_kwh ?? prev.liveReading,
+        lastSync: firebaseData.ts ? String(firebaseData.ts) : 'Just now',
+      }));
+    }
+  });
+
+  return () => unsubscribe();
+}, []);
 
   if (!isLoggedIn) {
     return (
@@ -75,7 +96,7 @@ export default function App() {
       {activeScreen === 'dashboard' && (
         <DashboardScreen
           user={fakeUser}
-          data={fakeDashboardData}
+          data={liveDashboardData}
           onOpenSettings={() => setActiveScreen('settings')}
         />
       )}
@@ -105,7 +126,7 @@ export default function App() {
 
       {activeScreen === 'billing' && (
         <BillingScreen
-          data={fakeDashboardData}
+          data={liveDashboardDataDashboardData}
           onBack={() => setActiveScreen('settings')}
         />
       )}
@@ -217,6 +238,15 @@ function DashboardScreen({ user, data, onOpenSettings }) {
           <Text style={styles.balanceMiniPillText}>Prepaid Meter</Text>
         </View>
       </View>
+      <View style={styles.liveReadingCard}>
+  <Text style={styles.liveReadingTitle}>Live Reading</Text>
+  <Text style={styles.liveReadingValue}>
+    {data.liveReading ?? 0} kWh
+  </Text>
+  <Text style={styles.liveReadingSubtitle}>
+    Last updated: {data.lastSync ?? 'Just now'}
+  </Text>
+</View>
 
       <View style={styles.billingPreviewCard}>
         <View style={styles.billingPreviewHeader}>
@@ -1288,4 +1318,31 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: '#0f766e',
   },
+  liveReadingCard: {
+  backgroundColor: '#ffffff',
+  borderRadius: 24,
+  padding: 18,
+  marginBottom: 20,
+  shadowColor: '#0f172a',
+  shadowOpacity: 0.05,
+  shadowRadius: 14,
+  shadowOffset: { width: 0, height: 8 },
+  elevation: 3,
+},
+liveReadingTitle: {
+  fontSize: 14,
+  color: '#64748b',
+  marginBottom: 8,
+  fontWeight: '600',
+},
+liveReadingValue: {
+  fontSize: 28,
+  fontWeight: '800',
+  color: '#0f172a',
+},
+liveReadingSubtitle: {
+  fontSize: 13,
+  color: '#94a3b8',
+  marginTop: 6,
+},
 });

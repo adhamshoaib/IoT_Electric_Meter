@@ -8,45 +8,90 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LineChart, BarChart } from 'react-native-chart-kit';
+import { BarChart } from 'react-native-chart-kit';
 
 const screenWidth = Dimensions.get('window').width;
 
 const chartConfig = {
   backgroundGradientFrom: '#ffffff',
-  backgroundGradientTo: '#f8fafc',
+  backgroundGradientTo: '#ffffff',
   color: (opacity = 1) => `rgba(15, 118, 110, ${opacity})`,
   labelColor: (opacity = 1) => `rgba(100, 116, 139, ${opacity})`,
   strokeWidth: 2.5,
-  propsForDots: { r: '4', strokeWidth: '0', stroke: '#0f766e' },
-  propsForBackgroundLines: { stroke: '#e2e8f0' },
+  propsForDots: {
+    r: '4',
+    strokeWidth: '0',
+    stroke: '#0f766e',
+  },
+  propsForBackgroundLines: {
+    stroke: '#e2e8f0',
+  },
 };
 
 const calculateCost = (kwh) => {
   if (kwh <= 50) return kwh * 0.58;
   else if (kwh <= 100) return 50 * 0.58 + (kwh - 50) * 0.68;
   else if (kwh <= 200) return 50 * 0.58 + 50 * 0.68 + (kwh - 100) * 0.83;
-  else if (kwh <= 350) return 50 * 0.58 + 50 * 0.68 + 100 * 0.83 + (kwh - 200) * 1.25;
-  else if (kwh <= 650) return 50 * 0.58 + 50 * 0.68 + 100 * 0.83 + 150 * 1.25 + (kwh - 350) * 1.40;
-  else if (kwh <= 1000) return 50 * 0.58 + 50 * 0.68 + 100 * 0.83 + 150 * 1.25 + 300 * 1.40 + (kwh - 650) * 1.50;
-  else return 50 * 0.58 + 50 * 0.68 + 100 * 0.83 + 150 * 1.25 + 300 * 1.40 + 350 * 1.50 + (kwh - 1000) * 1.65;
+  else if (kwh <= 350) {
+    return 50 * 0.58 + 50 * 0.68 + 100 * 0.83 + (kwh - 200) * 1.25;
+  } else if (kwh <= 650) {
+    return (
+      50 * 0.58 +
+      50 * 0.68 +
+      100 * 0.83 +
+      150 * 1.25 +
+      (kwh - 350) * 1.4
+    );
+  } else if (kwh <= 1000) {
+    return (
+      50 * 0.58 +
+      50 * 0.68 +
+      100 * 0.83 +
+      150 * 1.25 +
+      300 * 1.4 +
+      (kwh - 650) * 1.5
+    );
+  } else {
+    return (
+      50 * 0.58 +
+      50 * 0.68 +
+      100 * 0.83 +
+      150 * 1.25 +
+      300 * 1.4 +
+      350 * 1.5 +
+      (kwh - 1000) * 1.65
+    );
+  }
 };
 
 const lastWeekLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const lastWeekKwh = [12.4, 10.8, 13.1, 11.5, 14.2, 16.8, 15.3];
-const lastWeekCost = lastWeekKwh.map((kwh) => calculateCost(kwh));
 
-const last6MonthsLabels = ['Mar', 'Feb', 'Jan', 'Dec', 'Nov', 'Oct'];
-const last6MonthsKwh = [295, 315, 380, 340, 310, 315];
-const last6MonthsCost = last6MonthsKwh.map((kwh) => calculateCost(kwh));
+const previousWeekKwh = [10.9, 10.2, 11.8, 10.7, 12.6, 14.9, 13.8];
 
 export default function StatisticsScreen({ onBack }) {
   const weekTotalKwh = lastWeekKwh.reduce((a, b) => a + b, 0);
-  const weekTotalCost = lastWeekCost.reduce((a, b) => a + b, 0);
-  const weekAvgKwh = (weekTotalKwh / 7).toFixed(1);
+  const previousWeekTotalKwh = previousWeekKwh.reduce((a, b) => a + b, 0);
+  const weekTotalCost = calculateCost(weekTotalKwh);
+  const weekAvgKwh = weekTotalKwh / 7;
   const weekMaxKwh = Math.max(...lastWeekKwh);
   const weekMinKwh = Math.min(...lastWeekKwh);
   const weekMaxDay = lastWeekLabels[lastWeekKwh.indexOf(weekMaxKwh)];
+
+  const weeklyChangePercent =
+    previousWeekTotalKwh === 0
+      ? 0
+      : ((weekTotalKwh - previousWeekTotalKwh) / previousWeekTotalKwh) * 100;
+
+  const projectedMonthlyKwh = Math.round(weekAvgKwh * 30);
+  const projectedMonthlyCost = calculateCost(projectedMonthlyKwh);
+
+  const trendText =
+    weeklyChangePercent > 0
+      ? `Up ${weeklyChangePercent.toFixed(1)}% from last week`
+      : weeklyChangePercent < 0
+      ? `Down ${Math.abs(weeklyChangePercent).toFixed(1)}% from last week`
+      : 'Same as last week';
 
   return (
     <View style={styles.container}>
@@ -55,176 +100,169 @@ export default function StatisticsScreen({ onBack }) {
           <Ionicons name="chevron-back" size={22} color="#0f172a" />
         </TouchableOpacity>
 
-        <Text style={styles.pageTitle}>Statistics</Text>
+        <View style={styles.headerTextWrap}>
+          <Text style={styles.pageTitle}>Statistics</Text>
+          <Text style={styles.pageSubtitle}>Track your recent energy trend</Text>
+        </View>
 
         <View style={styles.topSpacer} />
       </View>
 
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-        <Text style={styles.sectionTitle}>Last Week</Text>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.heroCard}>
+          <View style={styles.heroGlowOne} />
+          <View style={styles.heroGlowTwo} />
 
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Total Consumption</Text>
-            <View style={styles.valueRow}>
-              <Text style={styles.summaryValue}>{weekTotalKwh.toFixed(1)}</Text>
-              <Text style={styles.summaryUnit}>kWh</Text>
+          <View style={styles.heroTopRow}>
+            <View>
+              <Text style={styles.heroEyebrow}>THIS WEEK</Text>
+              <Text style={styles.heroMainValue}>
+                {weekTotalKwh.toFixed(1)}
+                <Text style={styles.heroUnit}> kWh</Text>
+              </Text>
+              <Text style={styles.heroSubtext}>Estimated cost: EGP {weekTotalCost.toFixed(2)}</Text>
+            </View>
+
+            <View style={styles.heroPill}>
+              <Text style={styles.heroPillText}>{trendText}</Text>
             </View>
           </View>
 
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Total Cost</Text>
-            <View style={styles.valueRow}>
-              <Text style={[styles.summaryValue, { color: '#0f766e' }]}>
-                EGP {weekTotalCost.toFixed(2)}
+          <View style={styles.heroDivider} />
+
+          <View style={styles.heroBottomRow}>
+            <View style={styles.heroBottomItem}>
+              <Text style={styles.heroBottomLabel}>Average / Day</Text>
+              <Text style={styles.heroBottomValue}>{weekAvgKwh.toFixed(1)} kWh</Text>
+            </View>
+
+            <View style={styles.heroBottomItem}>
+              <Text style={styles.heroBottomLabel}>Peak Day</Text>
+              <Text style={styles.heroBottomValue}>{weekMaxDay}</Text>
+            </View>
+
+            <View style={styles.heroBottomItem}>
+              <Text style={styles.heroBottomLabel}>Highest Reading</Text>
+              <Text style={styles.heroBottomValue}>{weekMaxKwh.toFixed(1)} kWh</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.comparisonCard}>
+          <View style={styles.comparisonHeader}>
+            <Text style={styles.sectionTitle}>Weekly Comparison</Text>
+            <Text style={styles.sectionSubtext}>How this week compares to the previous one</Text>
+          </View>
+
+          <View style={styles.comparisonRow}>
+            <View style={styles.comparisonItem}>
+              <Text style={styles.comparisonLabel}>This Week</Text>
+              <Text style={styles.comparisonValue}>{weekTotalKwh.toFixed(1)} kWh</Text>
+            </View>
+
+            <View style={styles.comparisonDivider} />
+
+            <View style={styles.comparisonItem}>
+              <Text style={styles.comparisonLabel}>Last Week</Text>
+              <Text style={styles.comparisonValue}>{previousWeekTotalKwh.toFixed(1)} kWh</Text>
+            </View>
+
+            <View style={styles.comparisonDivider} />
+
+            <View style={styles.comparisonItem}>
+              <Text style={styles.comparisonLabel}>Change</Text>
+              <Text
+                style={[
+                  styles.comparisonValue,
+                  weeklyChangePercent >= 0 ? styles.upValue : styles.downValue,
+                ]}
+              >
+                {weeklyChangePercent >= 0 ? '+' : ''}
+                {weeklyChangePercent.toFixed(1)}%
               </Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.statsGrid}>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Daily Avg</Text>
-            <Text style={styles.statValue}>{weekAvgKwh} kWh</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Peak Day</Text>
-            <Text style={styles.statValue}>{weekMaxDay}</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Lowest</Text>
-            <Text style={styles.statValue}>{weekMinKwh} kWh</Text>
-          </View>
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Highest</Text>
-            <Text style={styles.statValue}>{weekMaxKwh} kWh</Text>
-          </View>
-        </View>
-
         <View style={styles.chartCard}>
           <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>Daily Consumption</Text>
+            <View>
+              <Text style={styles.sectionTitle}>Usage Trend</Text>
+              <Text style={styles.sectionSubtext}>
+                Daily electricity usage over the last 7 days
+              </Text>
+            </View>
+
             <View style={styles.chartBadge}>
               <Text style={styles.chartBadgeText}>Last 7 days</Text>
             </View>
           </View>
 
-          <BarChart
-            data={{ labels: lastWeekLabels, datasets: [{ data: lastWeekKwh }] }}
-            width={screenWidth - 55}
-            height={200}
-            chartConfig={chartConfig}
-            style={styles.chart}
-            withInnerLines={false}
-            showValuesOnTopOfBars
-          />
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chartScrollContent}
+          >
+            <BarChart
+              data={{ labels: lastWeekLabels, datasets: [{ data: lastWeekKwh }] }}
+              width={screenWidth + 160}
+              height={220}
+              chartConfig={chartConfig}
+              style={styles.chart}
+              withInnerLines={false}
+              showValuesOnTopOfBars
+              segments={4}
+              fromZero
+            />
+          </ScrollView>
         </View>
 
-        <Text style={styles.sectionTitle}>Last 6 Months</Text>
-
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Total kWh</Text>
-            <View style={styles.valueRow}>
-              <Text style={styles.summaryValue}>
-                {last6MonthsKwh.reduce((a, b) => a + b, 0)}
-              </Text>
-              <Text style={styles.summaryUnit}>kWh</Text>
+        <View style={styles.projectionCard}>
+          <View style={styles.projectionHeader}>
+            <View style={styles.projectionIconWrap}>
+              <Ionicons name="flash-outline" size={18} color="#0f766e" />
             </View>
-          </View>
 
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryLabel}>Total Cost</Text>
-            <View style={styles.valueRow}>
-              <Text style={[styles.summaryValue, { color: '#0f766e' }]}>
-                EGP {last6MonthsCost.reduce((a, b) => a + b, 0).toFixed(2)}
+            <View style={styles.projectionTextWrap}>
+              <Text style={styles.sectionTitle}>Monthly Projection</Text>
+              <Text style={styles.sectionSubtext}>
+                Based on your current weekly average
               </Text>
             </View>
           </View>
+
+          <View style={styles.projectionRow}>
+            <View style={styles.projectionItem}>
+              <Text style={styles.projectionLabel}>Projected Usage</Text>
+              <Text style={styles.projectionValue}>{projectedMonthlyKwh} kWh</Text>
+            </View>
+
+            <View style={styles.projectionItem}>
+              <Text style={styles.projectionLabel}>Projected Cost</Text>
+              <Text style={styles.projectionValue}>EGP {projectedMonthlyCost.toFixed(2)}</Text>
+            </View>
+          </View>
+
+          <Text style={styles.projectionFootnote}>
+            If your current pattern continues, your end-of-month consumption may reach about{' '}
+            {projectedMonthlyKwh} kWh.
+          </Text>
         </View>
 
-        <View style={styles.chartCard}>
-          <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>Usage vs Bill Comparison</Text>
-            <View style={styles.chartBadge}>
-              <Text style={styles.chartBadgeText}>6 Months</Text>
-            </View>
-          </View>
-
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#0f766e' }]} />
-              <Text style={styles.legendText}>kWh</Text>
-            </View>
-
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: '#22c55e' }]} />
-              <Text style={styles.legendText}>Cost (EGP)</Text>
-            </View>
-          </View>
-
-          <LineChart
-            data={{
-              labels: last6MonthsLabels,
-              datasets: [{ data: last6MonthsKwh.map((v) => v || 0) }],
-            }}
-            width={screenWidth - 48}
-            height={200}
-            chartConfig={{
-              ...chartConfig,
-              color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-            }}
-            bezier
-            style={styles.chartLine}
-            withInnerLines
-          />
-        </View>
-
-        <View style={styles.tableCard}>
-          <Text style={styles.tableTitle}>Monthly Breakdown</Text>
-
-          <View style={styles.tableHeader}>
-            <Text style={[styles.tableHeaderText, { flex: 1 }]}>Month</Text>
-            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>
-              kWh
-            </Text>
-            <Text style={[styles.tableHeaderText, { flex: 1, textAlign: 'center' }]}>
-              Cost
-            </Text>
-          </View>
-
-          {last6MonthsLabels.map((month, index) => (
-            <View
-              key={month}
-              style={[
-                styles.tableRow,
-                index === last6MonthsLabels.length - 1 && styles.tableRowLast,
-              ]}
-            >
-              <Text style={[styles.tableCell, { flex: 1 }]}>{month}</Text>
-              <Text style={[styles.tableCell, { flex: 1, textAlign: 'center' }]}>
-                {last6MonthsKwh[index]}
-              </Text>
-              <Text
-                style={[
-                  styles.tableCell,
-                  { flex: 1, textAlign: 'center', color: '#0f766e' },
-                ]}
-              >
-                EGP {last6MonthsCost[index].toFixed(2)}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={{ height: 100 }} />
+        <View style={{ height: 12 }} />
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f4f7fb' },
+  container: {
+    flex: 1,
+    backgroundColor: '#f4f7fb',
+  },
 
   pageTopRow: {
     flexDirection: 'row',
@@ -232,7 +270,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 12,
+    paddingBottom: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
     backgroundColor: '#f4f7fb',
@@ -247,29 +285,130 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
+  headerTextWrap: {
+    alignItems: 'center',
+  },
   pageTitle: {
     fontSize: 24,
     fontWeight: '800',
     color: '#0f172a',
   },
+  pageSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 2,
+  },
   topSpacer: {
     width: 42,
   },
 
-  scroll: { flex: 1, padding: 20, paddingBottom: 110 },
-  sectionTitle: {
+  scrollContent: {
+    padding: 20,
+    paddingBottom: 110,
+  },
+
+  heroCard: {
+    backgroundColor: '#0f766e',
+    borderRadius: 28,
+    padding: 22,
+    marginBottom: 18,
+    overflow: 'hidden',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  heroGlowOne: {
+    position: 'absolute',
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    backgroundColor: '#14b8a6',
+    top: -55,
+    right: -30,
+    opacity: 0.18,
+  },
+  heroGlowTwo: {
+    position: 'absolute',
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: '#99f6e4',
+    bottom: -25,
+    left: -15,
+    opacity: 0.12,
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  heroEyebrow: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+    color: '#ccfbf1',
+    marginBottom: 10,
+  },
+  heroMainValue: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#ffffff',
+  },
+  heroUnit: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#0f172a',
-    marginBottom: 16,
-    marginTop: 8,
+    color: '#d1fae5',
   },
-  summaryRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
-  summaryCard: {
+  heroSubtext: {
+    fontSize: 14,
+    color: '#d1fae5',
+    marginTop: 6,
+  },
+  heroPill: {
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    maxWidth: 140,
+  },
+  heroPillText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  heroDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginVertical: 18,
+  },
+  heroBottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  heroBottomItem: {
     flex: 1,
+  },
+  heroBottomLabel: {
+    fontSize: 12,
+    color: '#ccfbf1',
+    marginBottom: 6,
+    fontWeight: '600',
+  },
+  heroBottomValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+
+  comparisonCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 20,
-    padding: 20,
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 18,
     borderWidth: 1,
     borderColor: '#e2e8f0',
     shadowColor: '#0f172a',
@@ -278,38 +417,51 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
-  summaryLabel: { fontSize: 13, color: '#64748b', fontWeight: '600' },
-  valueRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 8 },
-  summaryValue: { fontSize: 28, fontWeight: '900', color: '#0f172a' },
-  summaryUnit: {
-    fontSize: 14,
+  comparisonHeader: {
+    marginBottom: 14,
+  },
+  comparisonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  comparisonItem: {
+    flex: 1,
+  },
+  comparisonDivider: {
+    width: 1,
+    height: 42,
+    backgroundColor: '#e2e8f0',
+    marginHorizontal: 12,
+  },
+  comparisonLabel: {
+    fontSize: 12,
     color: '#64748b',
+    marginBottom: 8,
     fontWeight: '600',
-    marginLeft: 4,
   },
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 20 },
-  statItem: {
-    width: '47%',
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#0f172a',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+  comparisonValue: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
   },
-  statLabel: { fontSize: 12, color: '#64748b', fontWeight: '600', marginBottom: 4 },
-  statValue: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
+  upValue: {
+    color: '#0f766e',
+  },
+  downValue: {
+    color: '#c2410c',
+  },
+
   chartCard: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
     borderRadius: 24,
-    padding: 20,
-    marginBottom: 20,
+    paddingTop: 20,
+    paddingLeft: 20,
+    paddingRight: 20,
+    paddingBottom: 20,
+    marginBottom: 18,
     shadowColor: '#0f172a',
     shadowOpacity: 0.05,
     shadowRadius: 10,
@@ -319,55 +471,94 @@ const styles = StyleSheet.create({
   chartHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 16,
   },
-  chartTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a' },
   chartBadge: {
     backgroundColor: '#ecfdf5',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 999,
   },
-  chartBadgeText: { fontSize: 11, fontWeight: '700', color: '#0f766e' },
-  chart: { borderRadius: 12, marginLeft: -8 },
-  chartLine: { borderRadius: 12, marginLeft: -8 },
-  legendRow: { flexDirection: 'row', justifyContent: 'center', gap: 24, marginBottom: 12 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 10, height: 10, borderRadius: 5 },
-  legendText: { fontSize: 12, color: '#64748b', fontWeight: '600' },
-  tableCard: {
+  chartBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0f766e',
+  },
+  chartScrollContent: {
+    paddingRight: 24,
+  },
+  chart: {
+    borderRadius: 12,
+  },
+
+  projectionCard: {
     backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 18,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    borderRadius: 20,
-    padding: 20,
     shadowColor: '#0f172a',
     shadowOpacity: 0.05,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 2,
   },
-  tableTitle: { fontSize: 17, fontWeight: '800', color: '#0f172a', marginBottom: 16 },
-  tableHeader: {
+  projectionHeader: {
     flexDirection: 'row',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
+    alignItems: 'center',
+    marginBottom: 16,
   },
-  tableHeaderText: {
-    fontSize: 11,
+  projectionIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#ecfdf5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  projectionTextWrap: {
+    flex: 1,
+  },
+  projectionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
+  },
+  projectionItem: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+    borderRadius: 18,
+    padding: 14,
+  },
+  projectionLabel: {
+    fontSize: 12,
     color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    fontWeight: '700',
+    marginBottom: 8,
+    fontWeight: '600',
   },
-  tableRow: {
-    flexDirection: 'row',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+  projectionValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0f172a',
   },
-  tableRowLast: { borderBottomWidth: 0 },
-  tableCell: { fontSize: 14, color: '#0f172a', fontWeight: '500' },
+  projectionFootnote: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#64748b',
+  },
+
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  sectionSubtext: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 4,
+    lineHeight: 18,
+  },
 });
