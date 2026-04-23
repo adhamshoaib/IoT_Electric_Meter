@@ -16,6 +16,12 @@ static uart_service_handle_t uart_handle;
 #define BL_FULL_PACKET 0xAA
 #define BL_MAX_FRAME_SIZE 35
 
+#define BL0939_VREF 1.218f
+#define BL0939_VRMS_SCALE 79931.0f
+#define VP_AT_220V 0.0844f
+#define MAINS_CALIB_VOLT 220.0f
+#define DIVIDER_RATIO (MAINS_CALIB_VOLT / VP_AT_220V)
+
 #define BL0939_SEL_PIN (-1)
 #define BL0939_SEL_ACTIVE_LEVEL 1
 
@@ -76,6 +82,18 @@ static int32_t decode_s24(const uint8_t *p)
 static uint16_t decode_u16(const uint8_t *p)
 {
     return (uint16_t)(((uint16_t)p[1] << 8) | p[0]);
+}
+
+static float vrms_raw_to_vp_mv(uint32_t v_rms_raw)
+{
+    float vp_rms_v = ((float)v_rms_raw * BL0939_VREF) / BL0939_VRMS_SCALE;
+    return vp_rms_v * 1000.0f;
+}
+
+static float vrms_raw_to_mains_v(uint32_t v_rms_raw)
+{
+    float vp_rms_v = ((float)v_rms_raw * BL0939_VREF) / BL0939_VRMS_SCALE;
+    return vp_rms_v * DIVIDER_RATIO;
 }
 
 static const char *inverse_name(uint32_t inverse_mask)
@@ -245,13 +263,17 @@ static void log_frame_values(const uint8_t *frame, size_t frame_size)
     {
         uint32_t ia_rms = decode_u24(&frame[4]);
         uint32_t ib_rms = decode_u24(&frame[7]);
-        uint32_t v_rms = decode_u24(&frame[10]);
+        uint32_t v_rms_raw = decode_u24(&frame[10]);
+        float vp_mv = vrms_raw_to_vp_mv(v_rms_raw);
+        float mains_v = vrms_raw_to_mains_v(v_rms_raw);
         int32_t a_watt = decode_s24(&frame[16]);
         int32_t b_watt = decode_s24(&frame[19]);
 
         ESP_LOGI(TAG,
-                 "Decoded 35B: Vrms=%lu IaRms=%lu IbRms=%lu A_W=%ld B_W=%ld",
-                 (unsigned long)v_rms,
+                 "Decoded 35B: VrmsRaw=%lu Vp=%.3f mV Vac=%.2f IaRms=%lu IbRms=%lu A_W=%ld B_W=%ld",
+                 (unsigned long)v_rms_raw,
+                 vp_mv,
+                 mains_v,
                  (unsigned long)ia_rms,
                  (unsigned long)ib_rms,
                  (long)a_watt,
@@ -331,76 +353,6 @@ static bool try_mode(const bl_mode_t *mode, uint8_t *frame_out)
     return false;
 }
 
-static bool detect_mode(bl_mode_t *out_mode, uint8_t *frame_out)
-{
-    const uint32_t baud_rates[] = {4800, 9600};
-    const uint8_t read_cmds[] = {
-        0x50,
-        0x51,
-        0x52,
-        0x53,
-        0x54,
-        0x55,
-        0x56,
-        0x57,
-        0x58,
-        0x59,
-        0x5A,
-        0x5B,
-        0x5C,
-        0x5D,
-        0x5E,
-        0x5F,
-    };
-    const size_t frame_sizes[] = {35, 23};
-    const uart_stop_bits_t stop_bits[] = {UART_STOP_BITS_1_5, UART_STOP_BITS_1, UART_STOP_BITS_2};
-    const uint32_t inverse_masks[] = {
-        UART_SIGNAL_INV_DISABLE,
-        UART_SIGNAL_RXD_INV,
-        UART_SIGNAL_TXD_INV,
-        UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV,
-    };
-
-    for (size_t b = 0; b < ARRAY_LEN(baud_rates); b++)
-    {
-        for (size_t c = 0; c < ARRAY_LEN(read_cmds); c++)
-        {
-            for (size_t f = 0; f < ARRAY_LEN(frame_sizes); f++)
-            {
-                for (size_t s = 0; s < ARRAY_LEN(stop_bits); s++)
-                {
-                    for (size_t i = 0; i < ARRAY_LEN(inverse_masks); i++)
-                    {
-                        bl_mode_t mode = {
-                            .baud_rate = baud_rates[b],
-                            .read_cmd = read_cmds[c],
-                            .frame_size = frame_sizes[f],
-                            .stop_bits = stop_bits[s],
-                            .inverse_mask = inverse_masks[i],
-                        };
-
-                        ESP_LOGI(TAG,
-                                 "Trying mode: baud=%lu read=0x%02X frame=%u stop=%s inv=%s",
-                                 (unsigned long)mode.baud_rate,
-                                 mode.read_cmd,
-                                 (unsigned)mode.frame_size,
-                                 stop_bits_name(mode.stop_bits),
-                                 inverse_name(mode.inverse_mask));
-
-                        if (try_mode(&mode, frame_out))
-                        {
-                            *out_mode = mode;
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
 void app_main(void)
 {
     esp_err_t err = uart_service_init(&uart_config, &uart_handle);
@@ -415,60 +367,110 @@ void app_main(void)
     uint8_t frame[BL_MAX_FRAME_SIZE] = {0};
     bl_mode_t active_mode = {
         .baud_rate = 4800,
-        .read_cmd = 0x55,
+        .read_cmd = 0x50,
         .frame_size = 35,
         .stop_bits = UART_STOP_BITS_1_5,
         .inverse_mask = UART_SIGNAL_INV_DISABLE,
     };
 
-    while (!detect_mode(&active_mode, frame))
-    {
-        ESP_LOGW(TAG, "No valid BL09xx mode found. Retrying scan in 3 seconds.");
-        vTaskDelay(pdMS_TO_TICKS(3000));
-    }
+    ESP_LOGI(TAG,
+             "Using fixed mode: baud=%lu read=0x%02X frame=%u stop=%s inv=%s",
+             (unsigned long)active_mode.baud_rate,
+             active_mode.read_cmd,
+             (unsigned)active_mode.frame_size,
+             stop_bits_name(active_mode.stop_bits),
+             inverse_name(active_mode.inverse_mask));
 
     err = apply_uart_mode(&active_mode);
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to apply detected mode: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to apply fixed mode: %s", esp_err_to_name(err));
         return;
     }
 
+    uint8_t write_cmd = write_cmd_from_read(active_mode.read_cmd);
+    err = run_init_sequence(write_cmd);
+    if (err != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Init sequence TX failed (cmd=0x%02X): %s", write_cmd, esp_err_to_name(err));
+        return;
+    }
+
+    int consecutive_failures = 0;
+
     while (1)
     {
-        uart_flush_input(uart_config.port);
+        bool frame_ok = false;
 
-        err = request_frame(active_mode.read_cmd);
-        if (err != ESP_OK)
+        for (int attempt = 0; attempt < 2; attempt++)
         {
-            ESP_LOGW(TAG, "Request TX failed: %s", esp_err_to_name(err));
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
+            err = request_frame(active_mode.read_cmd);
+            if (err != ESP_OK)
+            {
+                if (attempt == 1)
+                    ESP_LOGW(TAG, "Request TX failed: %s", esp_err_to_name(err));
+                continue;
+            }
+
+            err = read_frame(frame, active_mode.frame_size, 1000);
+            if (err == ESP_ERR_TIMEOUT)
+            {
+                if (attempt == 1)
+                    ESP_LOGW(TAG, "No response from BL09xx after retry. Check SEL/address/pull-up.");
+                continue;
+            }
+            if (err != ESP_OK)
+            {
+                if (attempt == 1)
+                    ESP_LOGW(TAG, "Read error: %s", esp_err_to_name(err));
+                continue;
+            }
+
+            uint8_t expected = bl_checksum(frame, active_mode.frame_size, active_mode.read_cmd);
+            uint8_t received = frame[active_mode.frame_size - 1];
+            if (expected != received)
+            {
+                if (attempt == 1)
+                {
+                    ESP_LOGW(TAG, "Checksum mismatch: expected 0x%02X got 0x%02X", expected, received);
+                    ESP_LOG_BUFFER_HEX(TAG, frame, active_mode.frame_size);
+                }
+                continue;
+            }
+
+            frame_ok = true;
+            break;
         }
 
-        err = read_frame(frame, active_mode.frame_size, 500);
-        if (err == ESP_ERR_TIMEOUT)
+        if (frame_ok)
         {
-            ESP_LOGW(TAG, "No response from BL09xx (detected mode).");
-        }
-        else if (err != ESP_OK)
-        {
-            ESP_LOGW(TAG, "Read error: %s", esp_err_to_name(err));
+            consecutive_failures = 0;
+            ESP_LOGI(TAG, "Frame OK (%u bytes)", (unsigned)active_mode.frame_size);
+            log_frame_values(frame, active_mode.frame_size);
         }
         else
         {
-            uint8_t expected = bl_checksum(frame, active_mode.frame_size, active_mode.read_cmd);
-            uint8_t received = frame[active_mode.frame_size - 1];
+            consecutive_failures++;
+        }
 
-            if (expected != received)
+        if (consecutive_failures >= 5)
+        {
+            ESP_LOGW(TAG, "Too many consecutive failures (%d). Retrying fixed BL09xx mode.", consecutive_failures);
+
+            if (try_mode(&active_mode, frame))
             {
-                ESP_LOGW(TAG, "Checksum mismatch: expected 0x%02X got 0x%02X", expected, received);
-                ESP_LOG_BUFFER_HEX(TAG, frame, active_mode.frame_size);
+                ESP_LOGI(TAG,
+                         "Recovery success: baud=%lu read=0x%02X frame=%u stop=%s inv=%s",
+                         (unsigned long)active_mode.baud_rate,
+                         active_mode.read_cmd,
+                         (unsigned)active_mode.frame_size,
+                         stop_bits_name(active_mode.stop_bits),
+                         inverse_name(active_mode.inverse_mask));
+                consecutive_failures = 0;
             }
             else
             {
-                ESP_LOGI(TAG, "Frame OK (%u bytes)", (unsigned)active_mode.frame_size);
-                log_frame_values(frame, active_mode.frame_size);
+                ESP_LOGW(TAG, "Recovery retry failed on fixed BL09xx mode.");
             }
         }
 
