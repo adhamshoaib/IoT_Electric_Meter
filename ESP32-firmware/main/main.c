@@ -16,11 +16,13 @@ static uart_service_handle_t uart_handle;
 #define BL_FULL_PACKET 0xAA
 #define BL_MAX_FRAME_SIZE 35
 
-#define BL0939_VREF 1.218f
-#define BL0939_VRMS_SCALE 79931.0f
+#define BL0939_UREF 17159.0f
 #define VP_AT_220V 0.0844f
 #define MAINS_CALIB_VOLT 220.0f
-#define DIVIDER_RATIO (MAINS_CALIB_VOLT / VP_AT_220V)
+#define VP_MV_PER_MAINS_V ((VP_AT_220V * 1000.0f) / MAINS_CALIB_VOLT)
+#define BL0939_VRMS_ZERO_OFFSET_RAW 2720U // Tune from VrmsRaw with Vp tied to GND
+#define VP_NOISE_FLOOR_MV 0.2f
+#define VAC_NOISE_FLOOR_V 0.5f
 
 #define BL0939_SEL_PIN (-1)
 #define BL0939_SEL_ACTIVE_LEVEL 1
@@ -84,16 +86,28 @@ static uint16_t decode_u16(const uint8_t *p)
     return (uint16_t)(((uint16_t)p[1] << 8) | p[0]);
 }
 
-static float vrms_raw_to_vp_mv(uint32_t v_rms_raw)
+static uint32_t vrms_raw_apply_zero_offset(uint32_t v_rms_raw)
 {
-    float vp_rms_v = ((float)v_rms_raw * BL0939_VREF) / BL0939_VRMS_SCALE;
-    return vp_rms_v * 1000.0f;
+    if (v_rms_raw <= BL0939_VRMS_ZERO_OFFSET_RAW)
+        return 0;
+
+    return v_rms_raw - BL0939_VRMS_ZERO_OFFSET_RAW;
 }
 
 static float vrms_raw_to_mains_v(uint32_t v_rms_raw)
 {
-    float vp_rms_v = ((float)v_rms_raw * BL0939_VREF) / BL0939_VRMS_SCALE;
-    return vp_rms_v * DIVIDER_RATIO;
+    uint32_t corrected_raw = vrms_raw_apply_zero_offset(v_rms_raw);
+    float mains_v = (float)corrected_raw / BL0939_UREF;
+
+    return (mains_v < VAC_NOISE_FLOOR_V) ? 0.0f : mains_v;
+}
+
+static float vrms_raw_to_vp_mv(uint32_t v_rms_raw)
+{
+    float mains_v = vrms_raw_to_mains_v(v_rms_raw);
+    float vp_mv = mains_v * VP_MV_PER_MAINS_V;
+
+    return (vp_mv < VP_NOISE_FLOOR_MV) ? 0.0f : vp_mv;
 }
 
 static const char *inverse_name(uint32_t inverse_mask)
@@ -264,14 +278,16 @@ static void log_frame_values(const uint8_t *frame, size_t frame_size)
         uint32_t ia_rms = decode_u24(&frame[4]);
         uint32_t ib_rms = decode_u24(&frame[7]);
         uint32_t v_rms_raw = decode_u24(&frame[10]);
+        uint32_t v_rms_corr = vrms_raw_apply_zero_offset(v_rms_raw);
         float vp_mv = vrms_raw_to_vp_mv(v_rms_raw);
         float mains_v = vrms_raw_to_mains_v(v_rms_raw);
         int32_t a_watt = decode_s24(&frame[16]);
         int32_t b_watt = decode_s24(&frame[19]);
 
         ESP_LOGI(TAG,
-                 "Decoded 35B: VrmsRaw=%lu Vp=%.3f mV Vac=%.2f IaRms=%lu IbRms=%lu A_W=%ld B_W=%ld",
+                 "Decoded 35B: VrmsRaw=%lu VrmsRawAdj=%lu Vp=%.3f mV Vac=%.3f IaRms=%lu IbRms=%lu A_W=%ld B_W=%ld",
                  (unsigned long)v_rms_raw,
+                 (unsigned long)v_rms_corr,
                  vp_mv,
                  mains_v,
                  (unsigned long)ia_rms,
