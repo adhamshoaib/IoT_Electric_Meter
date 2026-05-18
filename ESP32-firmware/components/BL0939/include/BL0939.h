@@ -14,6 +14,8 @@
  *     .calibration           = { .voltage_ref = 15200.0f,
  *                                .current_ref = 324004.0f,
  *                                .energy_ref  = 3304.0f },
+ *     .phase_compensation    = { .corner_a = 0x00D2,   // CT-specific; 0 for resistive loads
+ *                                .corner_b = 0x00D2 },
  *     .current_channel       = BL0939_CURRENT_CHANNEL_SUM,
  *     .default_timeout_ms    = 200,
  *     .auto_request_before_read = true,
@@ -37,18 +39,12 @@
  * are rejected with ESP_ERR_INVALID_RESPONSE.
  */
 
-#ifndef BL0939_H
-#define BL0939_H
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
 #include "esp_err.h"
 #include "uart_service.h"
-
-#ifdef __cplusplus
-extern "C"
-{
-#endif
 
 /* -------------------------------------------------------------------------
  * Constants
@@ -60,6 +56,22 @@ extern "C"
 /** Expected value of the first byte of every BL0939 frame. */
 #define BL0939_FRAME_HEADER_VALUE 0x55U
 
+/** BL0939 register address: channel A phase compensation (A_CORNER, 16-bit, R/W, default 0x0000). */
+#define BL0939_REG_A_CORNER 0x0CU
+
+/** BL0939 register address: channel B phase compensation (B_CORNER, 16-bit, R/W, default 0x0000). */
+#define BL0939_REG_B_CORNER 0x0DU
+
+/**
+ * @brief Maximum raw value accepted by A_CORNER / B_CORNER registers.
+ *
+ * The BL0939 CORNER registers are 16-bit. The datasheet does not specify
+ * a sub-range, so the full 16-bit unsigned range is accepted here.
+ * Consult your datasheet revision for any undocumented upper limit and
+ * clamp accordingly in application code.
+ */
+#define BL0939_CORNER_MAX 0xFFFFU
+
 /**
  * @brief Pass as @p timeout_ms to use the value from bl0939_config_t::default_timeout_ms.
  *
@@ -70,264 +82,325 @@ extern "C"
  */
 #define BL0939_TIMEOUT_USE_DEFAULT UINT32_MAX
 
-    /* -------------------------------------------------------------------------
-     * Enumerations
-     * ---------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------
+ * Enumerations
+ * ---------------------------------------------------------------------- */
 
-    /**
-     * @brief Selects which hardware current channel maps to measurements.current_a.
-     *
-     * The BL0939 provides two independent current inputs (IA, IB). Typical
-     * single-phase boards connect only one; split-phase or two-load boards
-     * may use both. BL0939_CURRENT_CHANNEL_SUM is useful when you want the
-     * combined load current without post-processing in application code.
-     */
-    typedef enum
-    {
-        BL0939_CURRENT_CHANNEL_IA = 0,  /**< measurements.current_a reflects IA only. */
-        BL0939_CURRENT_CHANNEL_IB = 1,  /**< measurements.current_a reflects IB only. */
-        BL0939_CURRENT_CHANNEL_SUM = 2, /**< measurements.current_a = IA + IB (combined load). */
-    } bl0939_current_channel_t;
+/**
+ * @brief Selects which hardware current channel maps to measurements.current_a.
+ *
+ * The BL0939 provides two independent current inputs (IA, IB). Typical
+ * single-phase boards connect only one; split-phase or two-load boards
+ * may use both. BL0939_CURRENT_CHANNEL_SUM is useful when you want the
+ * combined load current without post-processing in application code.
+ */
+typedef enum
+{
+    BL0939_CURRENT_CHANNEL_IA = 0,  /**< measurements.current_a reflects IA only. */
+    BL0939_CURRENT_CHANNEL_IB = 1,  /**< measurements.current_a reflects IB only. */
+    BL0939_CURRENT_CHANNEL_SUM = 2, /**< measurements.current_a = IA + IB (combined load). */
+} bl0939_current_channel_t;
 
-    /* -------------------------------------------------------------------------
-     * Configuration & calibration types
-     * ---------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------
+ * Configuration & calibration types
+ * ---------------------------------------------------------------------- */
 
-    /**
-     * @brief Per-board calibration constants for raw-to-engineering conversion.
-     *
-     * The driver applies the following formulas:
-     * @code
-     * voltage_v     = (float)v_rms_raw  / calibration.voltage_ref
-     * current_X_a   = (float)iX_rms_raw / calibration.current_ref
-     * energy_X_kwh  = (float)cfX_cnt    / calibration.energy_ref
-     * @endcode
-     *
-     * Derive these constants from the BL0939 datasheet equations and your
-     * shunt/divider component values. All fields must be strictly positive
-     * (> 0); the driver rejects configurations that violate this constraint.
-     *
-     * @note The CF pulse counters (cfa_cnt / cfb_cnt) are hardware pulse counts
-     *       accumulated since the last read. They are NOT an on-chip energy
-     *       register. energy_ref must account for your pulse-to-kWh scaling.
-     */
-    typedef struct
-    {
-        float voltage_ref; /**< Divisor converting v_rms raw counts to volts. */
-        float current_ref; /**< Divisor converting i_rms raw counts to amperes. */
-        float energy_ref;  /**< Divisor converting CF pulse counts to kWh. */
-    } bl0939_calibration_t;
+/**
+ * @brief Per-board calibration constants for raw-to-engineering conversion.
+ *
+ * The driver applies the following formulas:
+ * @code
+ * voltage_v     = (float)v_rms_raw  / calibration.voltage_ref
+ * current_X_a   = (float)iX_rms_raw / calibration.current_ref
+ * energy_X_kwh  = (float)cfX_cnt    / calibration.energy_ref
+ * @endcode
+ *
+ * Derive these constants from the BL0939 datasheet equations and your
+ * shunt/divider component values. All fields must be strictly positive
+ * (> 0); the driver rejects configurations that violate this constraint.
+ *
+ * @note The CF pulse counters (cfa_cnt / cfb_cnt) are hardware pulse counts
+ *       accumulated since the last read. They are NOT an on-chip energy
+ *       register. energy_ref must account for your pulse-to-kWh scaling.
+ */
+typedef struct
+{
+    float voltage_ref; /**< Divisor converting v_rms raw counts to volts. */
+    float current_ref; /**< Divisor converting i_rms raw counts to amperes. */
+    float energy_ref;  /**< Divisor converting CF pulse counts to kWh. */
+} bl0939_calibration_t;
 
-    /**
-     * @brief Driver configuration supplied once at bl0939_init().
-     *
-     * The caller retains ownership of @p uart and must not deinitialize it
-     * before calling bl0939_deinit().
-     */
-    typedef struct
-    {
-        uart_service_handle_t uart;               /**< Initialized UART handle (required, must not be NULL). */
-        bl0939_calibration_t calibration;         /**< Initial calibration factors (all fields > 0). */
-        bl0939_current_channel_t current_channel; /**< Channel mapped to measurements.current_a. */
-        uint32_t default_timeout_ms;              /**< Timeout used when BL0939_TIMEOUT_USE_DEFAULT is passed. */
-        bool auto_request_before_read;            /**< When true, read APIs send a request command before receiving. */
-    } bl0939_config_t;
+/**
+ * @brief Phase compensation values for the BL0939 A_CORNER / B_CORNER registers.
+ *
+ * The BL0939 implements a digital phase-shift filter on each current channel
+ * that compensates for the phase error introduced by your current transformer
+ * (CT) or shunt + analog filter network. Writing a non-zero value to A_CORNER
+ * (reg 0x0C) or B_CORNER (reg 0x0D) shifts the current waveform sample timing
+ * relative to the voltage sample, allowing the CF pulse output to reflect true
+ * active power rather than apparent power.
+ *
+ * ### How to derive the correct value
+ * 1. Measure the phase lag of your CT or shunt circuit at the mains frequency
+ *    (typically 50 Hz or 60 Hz) in degrees.
+ * 2. Convert degrees to the BL0939 CORNER register value using the formula
+ *    in your datasheet revision (it varies by sampling clock configuration).
+ * 3. Verify by comparing the driver's energy reading against a calibrated
+ *    reference load at a known power factor (e.g. a motor or RC network).
+ *
+ * ### Default (no compensation)
+ * Set both fields to 0x0000 (BL0939 power-on default) for resistive loads
+ * where CT phase error is negligible.
+ *
+ * @note Values are written to the BL0939 over UART during bl0939_init() and
+ *       whenever bl0939_set_phase_compensation() is called. The register
+ *       is volatile (lost on BL0939 power cycle); re-apply after any reset.
+ */
+typedef struct
+{
+    uint16_t corner_a; /**< A_CORNER register value for channel A (0x0000 = no compensation). */
+    uint16_t corner_b; /**< B_CORNER register value for channel B (0x0000 = no compensation). */
+} bl0939_phase_compensation_t;
 
-    /* -------------------------------------------------------------------------
-     * Data types
-     * ---------------------------------------------------------------------- */
+/**
+ * @brief Driver configuration supplied once at bl0939_init().
+ *
+ * The caller retains ownership of @p uart and must not deinitialize it
+ * before calling bl0939_deinit().
+ */
+typedef struct
+{
+    uart_service_handle_t uart;                     /**< Initialized UART handle (required, must not be NULL). */
+    bl0939_calibration_t calibration;               /**< Initial calibration factors (all fields > 0). */
+    bl0939_phase_compensation_t phase_compensation; /**< Initial phase compensation ({0,0} for resistive loads). */
+    bl0939_current_channel_t current_channel;       /**< Channel mapped to measurements.current_a. */
+    uint32_t default_timeout_ms;                    /**< Timeout used when BL0939_TIMEOUT_USE_DEFAULT is passed. */
+    bool auto_request_before_read;                  /**< When true, read APIs send a request command before receiving. */
+} bl0939_config_t;
 
-    /**
-     * @brief Raw 24-bit values decoded verbatim from one BL0939 frame.
-     *
-     * Use these for calibration, diagnostics, or when you need to apply
-     * your own conversion math. For normal application use, prefer
-     * bl0939_measurements_t from bl0939_read_measurements().
-     *
-     * BL0939 encoding notes:
-     * - ia_rms / ib_rms / v_rms are unsigned magnitudes (always >= 0).
-     * - cfa_cnt / cfb_cnt are signed because the BL0939 outputs a two's
-     *   complement value when power flows in the reverse direction (e.g.
-     *   during energy export on a grid-tied inverter).
-     */
-    typedef struct
-    {
-        uint32_t ia_rms; /**< Raw RMS count for current channel A. */
-        uint32_t ib_rms; /**< Raw RMS count for current channel B. */
-        uint32_t v_rms;  /**< Raw RMS count for voltage. */
-        int32_t cfa_cnt; /**< CF pulse count, channel A (signed; negative = reverse flow). */
-        int32_t cfb_cnt; /**< CF pulse count, channel B (signed; negative = reverse flow). */
-    } bl0939_raw_data_t;
+/* -------------------------------------------------------------------------
+ * Data types
+ * ---------------------------------------------------------------------- */
 
-    /**
-     * @brief Engineering-unit measurements for application consumption.
-     *
-     * Produced by bl0939_read_measurements() after applying bl0939_calibration_t.
-     *
-     * @note energy_kwh, energy_a_kwh, and energy_b_kwh represent energy derived
-     *       from CF pulse counts since the last read, not cumulative totals.
-     *       Accumulate them in application code if a running total is required.
-     */
-    typedef struct
-    {
-        float voltage_v;    /**< RMS line voltage in volts. */
-        float current_a;    /**< Active channel current in amperes (see bl0939_current_channel_t). */
-        float current_ia_a; /**< Channel A current in amperes (always populated regardless of active channel). */
-        float current_ib_a; /**< Channel B current in amperes (always populated regardless of active channel). */
-        float energy_kwh;   /**< Combined energy (A + B) in kWh derived from this frame's CF counts. */
-        float energy_a_kwh; /**< Channel A energy in kWh derived from this frame's CF count. */
-        float energy_b_kwh; /**< Channel B energy in kWh derived from this frame's CF count. */
-    } bl0939_measurements_t;
+/**
+ * @brief Raw 24-bit values decoded verbatim from one BL0939 frame.
+ *
+ * Use these for calibration, diagnostics, or when you need to apply
+ * your own conversion math. For normal application use, prefer
+ * bl0939_measurements_t from bl0939_read_measurements().
+ *
+ * BL0939 encoding notes:
+ * - ia_rms / ib_rms / v_rms are unsigned magnitudes (always >= 0).
+ * - cfa_cnt / cfb_cnt are signed because the BL0939 outputs a two's
+ *   complement value when power flows in the reverse direction (e.g.
+ *   during energy export on a grid-tied inverter).
+ */
+typedef struct
+{
+    uint32_t ia_rms; /**< Raw RMS count for current channel A. */
+    uint32_t ib_rms; /**< Raw RMS count for current channel B. */
+    uint32_t v_rms;  /**< Raw RMS count for voltage. */
+    int32_t cfa_cnt; /**< CF pulse count, channel A (signed; negative = reverse flow). */
+    int32_t cfb_cnt; /**< CF pulse count, channel B (signed; negative = reverse flow). */
+} bl0939_raw_data_t;
 
-    /* -------------------------------------------------------------------------
-     * Lifecycle API
-     * ---------------------------------------------------------------------- */
+/**
+ * @brief Engineering-unit measurements for application consumption.
+ *
+ * Produced by bl0939_read_measurements() after applying bl0939_calibration_t.
+ *
+ * @note energy_kwh, energy_a_kwh, and energy_b_kwh represent energy derived
+ *       from CF pulse counts since the last read, not cumulative totals.
+ *       Accumulate them in application code if a running total is required.
+ */
+typedef struct
+{
+    float voltage_v;    /**< RMS line voltage in volts. */
+    float current_a;    /**< Active channel current in amperes (see bl0939_current_channel_t). */
+    float current_ia_a; /**< Channel A current in amperes (always populated regardless of active channel). */
+    float current_ib_a; /**< Channel B current in amperes (always populated regardless of active channel). */
+    float energy_kwh;   /**< Combined energy (A + B) in kWh derived from this frame's CF counts. */
+    float energy_a_kwh; /**< Channel A energy in kWh derived from this frame's CF count. */
+    float energy_b_kwh; /**< Channel B energy in kWh derived from this frame's CF count. */
+} bl0939_measurements_t;
 
-    /**
-     * @brief Initialize the singleton BL0939 driver.
-     *
-     * Must be called before any other bl0939_* function. Calling this a second
-     * time without an intervening bl0939_deinit() returns ESP_ERR_INVALID_STATE.
-     *
-     * @param[in] config  Non-NULL pointer to a fully populated bl0939_config_t.
-     *
-     * @retval ESP_OK               Driver initialized successfully.
-     * @retval ESP_ERR_INVALID_ARG  @p config is NULL, uart handle is NULL,
-     *                              or any calibration factor is <= 0.
-     * @retval ESP_ERR_INVALID_STATE Driver was already initialized.
-     */
-    esp_err_t bl0939_init(const bl0939_config_t *config);
+/* -------------------------------------------------------------------------
+ * Lifecycle API
+ * ---------------------------------------------------------------------- */
 
-    /**
-     * @brief Deinitialize the driver and release internal state.
-     *
-     * The uart_service handle is *not* deinitialized; UART lifetime is the
-     * caller's responsibility.
-     *
-     * @retval ESP_OK               Driver deinitialized successfully.
-     * @retval ESP_ERR_INVALID_STATE Driver was not initialized.
-     */
-    esp_err_t bl0939_deinit(void);
+/**
+ * @brief Initialize the singleton BL0939 driver.
+ *
+ * Must be called before any other bl0939_* function. Calling this a second
+ * time without an intervening bl0939_deinit() returns ESP_ERR_INVALID_STATE.
+ *
+ * @param[in] config  Non-NULL pointer to a fully populated bl0939_config_t.
+ *
+ * @retval ESP_OK               Driver initialized successfully.
+ * @retval ESP_ERR_INVALID_ARG  @p config is NULL, uart handle is NULL,
+ *                              or any calibration factor is <= 0.
+ * @retval ESP_ERR_INVALID_STATE Driver was already initialized.
+ */
+esp_err_t bl0939_init(const bl0939_config_t *config);
 
-    /**
-     * @brief Query whether the driver has been initialized.
-     *
-     * Prefer checking the return value of bl0939_* functions over polling this
-     * in application code; use this only for assertions or diagnostics.
-     *
-     * @return true if initialized, false otherwise.
-     */
-    bool bl0939_is_initialized(void);
+/**
+ * @brief Deinitialize the driver and release internal state.
+ *
+ * The uart_service handle is *not* deinitialized; UART lifetime is the
+ * caller's responsibility.
+ *
+ * @retval ESP_OK               Driver deinitialized successfully.
+ * @retval ESP_ERR_INVALID_STATE Driver was not initialized.
+ */
+esp_err_t bl0939_deinit(void);
 
-    /* -------------------------------------------------------------------------
-     * Communication API
-     * ---------------------------------------------------------------------- */
+/**
+ * @brief Query whether the driver has been initialized.
+ *
+ * Prefer checking the return value of bl0939_* functions over polling this
+ * in application code; use this only for assertions or diagnostics.
+ *
+ * @return true if initialized, false otherwise.
+ */
+bool bl0939_is_initialized(void);
 
-    /**
-     * @brief Send the BL0939 read-request command over UART.
-     *
-     * Required before each frame reception unless bl0939_config_t::auto_request_before_read
-     * is true, in which case bl0939_read_raw() and bl0939_read_measurements() call
-     * this automatically.
-     *
-     * Call this explicitly only when you need precise control over request timing
-     * (e.g. triggering on an external event before reading).
-     *
-     * @retval ESP_OK               Command sent successfully.
-     * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
-     * @retval (other)              UART transmission error from uart_service_send().
-     */
-    esp_err_t bl0939_request_packet(void);
+/* -------------------------------------------------------------------------
+ * Communication API
+ * ---------------------------------------------------------------------- */
 
-    /* -------------------------------------------------------------------------
-     * Read API
-     * ---------------------------------------------------------------------- */
+/**
+ * @brief Send the BL0939 read-request command over UART.
+ *
+ * Required before each frame reception unless bl0939_config_t::auto_request_before_read
+ * is true, in which case bl0939_read_raw() and bl0939_read_measurements() call
+ * this automatically.
+ *
+ * Call this explicitly only when you need precise control over request timing
+ * (e.g. triggering on an external event before reading).
+ *
+ * @retval ESP_OK               Command sent successfully.
+ * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
+ * @retval (other)              UART transmission error from uart_service_send().
+ */
+esp_err_t bl0939_request_packet(void);
 
-    /**
-     * @brief Receive and decode one BL0939 frame into raw register values.
-     *
-     * If bl0939_config_t::auto_request_before_read is true, a request command
-     * is sent before waiting for the frame.
-     *
-     * Frame validation (header byte == 0x55, checksum match) is always performed.
-     * A frame that fails either check is discarded and ESP_ERR_INVALID_RESPONSE
-     * is returned; no partial data is written to @p out_raw.
-     *
-     * @param[out] out_raw    Destination for decoded raw values. Must not be NULL.
-     * @param[in]  timeout_ms Milliseconds to wait for a complete frame, or
-     *                        BL0939_TIMEOUT_USE_DEFAULT.
-     *
-     * @retval ESP_OK                  Frame received and decoded successfully.
-     * @retval ESP_ERR_INVALID_ARG     @p out_raw is NULL.
-     * @retval ESP_ERR_INVALID_STATE   Driver is not initialized.
-     * @retval ESP_ERR_TIMEOUT         No complete frame arrived within @p timeout_ms.
-     * @retval ESP_ERR_INVALID_RESPONSE Frame header or checksum mismatch.
-     */
-    esp_err_t bl0939_read_raw(bl0939_raw_data_t *out_raw, uint32_t timeout_ms);
+/* -------------------------------------------------------------------------
+ * Read API
+ * ---------------------------------------------------------------------- */
 
-    /**
-     * @brief Receive one BL0939 frame and return calibrated engineering measurements.
-     *
-     * Internally calls bl0939_read_raw() then applies the current calibration
-     * factors. On any error, @p out_measurements is left unmodified.
-     *
-     * @param[out] out_measurements  Destination for converted values. Must not be NULL.
-     * @param[in]  timeout_ms        Milliseconds to wait, or BL0939_TIMEOUT_USE_DEFAULT.
-     *
-     * @retval ESP_OK                  Measurements populated successfully.
-     * @retval ESP_ERR_INVALID_ARG     @p out_measurements is NULL.
-     * @retval ESP_ERR_INVALID_STATE   Driver is not initialized.
-     * @retval ESP_ERR_TIMEOUT         No complete frame arrived within @p timeout_ms.
-     * @retval ESP_ERR_INVALID_RESPONSE Frame header or checksum mismatch.
-     */
-    esp_err_t bl0939_read_measurements(bl0939_measurements_t *out_measurements, uint32_t timeout_ms);
+/**
+ * @brief Receive and decode one BL0939 frame into raw register values.
+ *
+ * If bl0939_config_t::auto_request_before_read is true, a request command
+ * is sent before waiting for the frame.
+ *
+ * Frame validation (header byte == 0x55, checksum match) is always performed.
+ * A frame that fails either check is discarded and ESP_ERR_INVALID_RESPONSE
+ * is returned; no partial data is written to @p out_raw.
+ *
+ * @param[out] out_raw    Destination for decoded raw values. Must not be NULL.
+ * @param[in]  timeout_ms Milliseconds to wait for a complete frame, or
+ *                        BL0939_TIMEOUT_USE_DEFAULT.
+ *
+ * @retval ESP_OK                  Frame received and decoded successfully.
+ * @retval ESP_ERR_INVALID_ARG     @p out_raw is NULL.
+ * @retval ESP_ERR_INVALID_STATE   Driver is not initialized.
+ * @retval ESP_ERR_TIMEOUT         No complete frame arrived within @p timeout_ms.
+ * @retval ESP_ERR_INVALID_RESPONSE Frame header or checksum mismatch.
+ */
+esp_err_t bl0939_read_raw(bl0939_raw_data_t *out_raw, uint32_t timeout_ms);
 
-    /* -------------------------------------------------------------------------
-     * Runtime configuration API
-     * ---------------------------------------------------------------------- */
+/**
+ * @brief Receive one BL0939 frame and return calibrated engineering measurements.
+ *
+ * Internally calls bl0939_read_raw() then applies the current calibration
+ * factors. On any error, @p out_measurements is left unmodified.
+ *
+ * @param[out] out_measurements  Destination for converted values. Must not be NULL.
+ * @param[in]  timeout_ms        Milliseconds to wait, or BL0939_TIMEOUT_USE_DEFAULT.
+ *
+ * @retval ESP_OK                  Measurements populated successfully.
+ * @retval ESP_ERR_INVALID_ARG     @p out_measurements is NULL.
+ * @retval ESP_ERR_INVALID_STATE   Driver is not initialized.
+ * @retval ESP_ERR_TIMEOUT         No complete frame arrived within @p timeout_ms.
+ * @retval ESP_ERR_INVALID_RESPONSE Frame header or checksum mismatch.
+ */
+esp_err_t bl0939_read_measurements(bl0939_measurements_t *out_measurements, uint32_t timeout_ms);
 
-    /**
-     * @brief Replace the active calibration factors.
-     *
-     * Takes effect immediately on the next bl0939_read_measurements() call.
-     * Useful when loading calibration from NVS after bl0939_init().
-     *
-     * @param[in] calibration  Non-NULL pointer; all three fields must be > 0.
-     *
-     * @retval ESP_OK               Calibration updated.
-     * @retval ESP_ERR_INVALID_ARG  @p calibration is NULL or any factor is <= 0.
-     * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
-     */
-    esp_err_t bl0939_set_calibration(const bl0939_calibration_t *calibration);
+/* -------------------------------------------------------------------------
+ * Runtime configuration API
+ * ---------------------------------------------------------------------- */
 
-    /**
-     * @brief Read back the currently active calibration factors.
-     *
-     * Useful for logging, NVS persistence, or verifying a bl0939_set_calibration() call.
-     *
-     * @param[out] out_calibration  Destination for current calibration. Must not be NULL.
-     *
-     * @retval ESP_OK               @p out_calibration populated.
-     * @retval ESP_ERR_INVALID_ARG  @p out_calibration is NULL.
-     * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
-     */
-    esp_err_t bl0939_get_calibration(bl0939_calibration_t *out_calibration);
+/**
+ * @brief Replace the active calibration factors.
+ *
+ * Takes effect immediately on the next bl0939_read_measurements() call.
+ * Useful when loading calibration from NVS after bl0939_init().
+ *
+ * @param[in] calibration  Non-NULL pointer; all three fields must be > 0.
+ *
+ * @retval ESP_OK               Calibration updated.
+ * @retval ESP_ERR_INVALID_ARG  @p calibration is NULL or any factor is <= 0.
+ * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
+ */
+esp_err_t bl0939_set_calibration(const bl0939_calibration_t *calibration);
 
-    /**
-     * @brief Change the current channel mapped to measurements.current_a.
-     *
-     * Does not affect current_ia_a or current_ib_a, which are always populated.
-     *
-     * @param[in] channel  BL0939_CURRENT_CHANNEL_IA, _IB, or _SUM.
-     *
-     * @retval ESP_OK               Channel updated.
-     * @retval ESP_ERR_INVALID_ARG  @p channel is not a valid bl0939_current_channel_t value.
-     * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
-     */
-    esp_err_t bl0939_set_current_channel(bl0939_current_channel_t channel);
+/**
+ * @brief Read back the currently active calibration factors.
+ *
+ * Useful for logging, NVS persistence, or verifying a bl0939_set_calibration() call.
+ *
+ * @param[out] out_calibration  Destination for current calibration. Must not be NULL.
+ *
+ * @retval ESP_OK               @p out_calibration populated.
+ * @retval ESP_ERR_INVALID_ARG  @p out_calibration is NULL.
+ * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
+ */
+esp_err_t bl0939_get_calibration(bl0939_calibration_t *out_calibration);
 
-#ifdef __cplusplus
-}
-#endif
+/**
+ * @brief Change the current channel mapped to measurements.current_a.
+ *
+ * Does not affect current_ia_a or current_ib_a, which are always populated.
+ *
+ * @param[in] channel  BL0939_CURRENT_CHANNEL_IA, _IB, or _SUM.
+ *
+ * @retval ESP_OK               Channel updated.
+ * @retval ESP_ERR_INVALID_ARG  @p channel is not a valid bl0939_current_channel_t value.
+ * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
+ */
+esp_err_t bl0939_set_current_channel(bl0939_current_channel_t channel);
 
-#endif /* BL0939_H */
+/**
+ * @brief Write phase compensation values to the BL0939 A_CORNER / B_CORNER registers.
+ *
+ * Sends a UART write command to update the hardware registers immediately.
+ * Call this after bl0939_init() whenever you load compensation values from
+ * NVS or after any BL0939 power cycle (the registers are volatile).
+ *
+ * Setting both fields to 0x0000 disables compensation (equivalent to
+ * the BL0939 power-on default).
+ *
+ * @param[in] compensation  Non-NULL pointer to the new compensation values.
+ *
+ * @retval ESP_OK               Registers written successfully.
+ * @retval ESP_ERR_INVALID_ARG  @p compensation is NULL.
+ * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
+ * @retval (other)              UART transmission error from uart_service_send().
+ */
+esp_err_t bl0939_set_phase_compensation(const bl0939_phase_compensation_t *compensation);
+
+/**
+ * @brief Read back the phase compensation values last written to the driver.
+ *
+ * Returns the values cached in driver state — not a live register read from
+ * the BL0939 hardware. The cache is updated by bl0939_init() and every
+ * successful bl0939_set_phase_compensation() call.
+ *
+ * @param[out] out_compensation  Destination for cached compensation values. Must not be NULL.
+ *
+ * @retval ESP_OK               @p out_compensation populated.
+ * @retval ESP_ERR_INVALID_ARG  @p out_compensation is NULL.
+ * @retval ESP_ERR_INVALID_STATE Driver is not initialized.
+ */
+esp_err_t bl0939_get_phase_compensation(bl0939_phase_compensation_t *out_compensation);
