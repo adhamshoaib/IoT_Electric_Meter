@@ -67,6 +67,38 @@ esp_err_t uart_service_send(uart_service_handle_t handle, const uint8_t *data, s
 esp_err_t uart_service_read(uart_service_handle_t handle, uint8_t *buf, size_t max_len, size_t *out_len, uint32_t timeout_ms);
 
 /**
+ * @brief Set UART stop bits at runtime.
+ *
+ * @param handle    Valid handle from uart_service_init.
+ * @param stop_bits Stop bit configuration.
+ * @return ESP_OK on success.
+ *         ESP_ERR_INVALID_ARG if handle is NULL.
+ *         ESP_FAIL on driver error.
+ */
+esp_err_t uart_service_set_stop_bits(uart_service_handle_t handle, uart_stop_bits_t stop_bits);
+
+/**
+ * @brief Set UART line inversion mask at runtime.
+ *
+ * @param handle       Valid handle from uart_service_init.
+ * @param inverse_mask Bitmask of uart_signal_inv_t flags.
+ * @return ESP_OK on success.
+ *         ESP_ERR_INVALID_ARG if handle is NULL.
+ *         ESP_FAIL on driver error.
+ */
+esp_err_t uart_service_set_line_inverse(uart_service_handle_t handle, uint32_t inverse_mask);
+
+/**
+ * @brief Flush pending RX bytes from UART driver buffer.
+ *
+ * @param handle Valid handle from uart_service_init.
+ * @return ESP_OK on success.
+ *         ESP_ERR_INVALID_ARG if handle is NULL.
+ *         ESP_FAIL on driver error.
+ */
+esp_err_t uart_service_flush_input(uart_service_handle_t handle);
+
+/**
  * @brief Deinitialize the UART service and free all resources.
  *
  * @param handle Pointer to a valid handle. Set to NULL on return.

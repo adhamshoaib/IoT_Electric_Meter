@@ -112,6 +112,30 @@ esp_err_t uart_service_read(uart_service_handle_t handle, uint8_t *buf, size_t m
     return ESP_OK;
 }
 
+esp_err_t uart_service_set_stop_bits(uart_service_handle_t handle, uart_stop_bits_t stop_bits)
+{
+    if (!handle)
+        return ESP_ERR_INVALID_ARG;
+
+    return uart_set_stop_bits(handle->port, stop_bits);
+}
+
+esp_err_t uart_service_set_line_inverse(uart_service_handle_t handle, uint32_t inverse_mask)
+{
+    if (!handle)
+        return ESP_ERR_INVALID_ARG;
+
+    return uart_set_line_inverse(handle->port, (uart_signal_inv_t)inverse_mask);
+}
+
+esp_err_t uart_service_flush_input(uart_service_handle_t handle)
+{
+    if (!handle)
+        return ESP_ERR_INVALID_ARG;
+
+    return uart_flush_input(handle->port);
+}
+
 esp_err_t uart_service_deinit(uart_service_handle_t *handle)
 {
     if (!handle || !*handle)

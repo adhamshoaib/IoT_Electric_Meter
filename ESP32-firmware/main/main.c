@@ -10,6 +10,7 @@
 #define BL0939_UART_TX_PIN GPIO_NUM_17
 #define BL0939_UART_RX_PIN GPIO_NUM_16
 #define BL0939_UART_BAUD_RATE 4800
+#define BL0939_DEVICE_ADDRESS 0U /* A4..A1 strap: 0..15 (e.g. 5 -> read cmd 0x55) */
 
 #define BL0939_DEFAULT_TIMEOUT_MS 200U
 #define BL0939_READ_PERIOD_MS 1000U
@@ -41,6 +42,7 @@ static esp_err_t init_meter(uart_service_handle_t *out_uart)
 
     const bl0939_config_t bl_cfg = {
         .uart = *out_uart,
+        .device_address = BL0939_DEVICE_ADDRESS,
         .calibration = {
             .voltage_ref = 15200.0f,
             .current_ref = 324004.0f,
@@ -91,8 +93,8 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "BL0939 test started (UART%d TX=%d RX=%d)",
-             BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN);
+    ESP_LOGI(TAG, "BL0939 test started (UART%d TX=%d RX=%d ADDR=%u)",
+             BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
 
     while (true)
     {

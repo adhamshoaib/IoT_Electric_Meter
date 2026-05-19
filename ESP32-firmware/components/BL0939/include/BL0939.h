@@ -11,6 +11,7 @@
  * @code
  * bl0939_config_t cfg = {
  *     .uart                  = my_uart_handle,
+ *     .device_address        = BL0939_DEVICE_ADDRESS_DEFAULT,
  *     .calibration           = { .voltage_ref = 15200.0f,
  *                                .current_ref = 324004.0f,
  *                                .energy_ref  = 3304.0f },
@@ -34,9 +35,10 @@
  * is performed.
  *
  * ### Frame validation
- * Every received frame is validated against the BL0939 header byte
- * (0x55) and its trailing 8-bit checksum. Frames that fail either check
- * are rejected with ESP_ERR_INVALID_RESPONSE.
+ * Every received frame is validated against the BL0939 response header
+ * byte value (0x55) and its
+ * trailing 8-bit checksum. Frames that fail either check are rejected
+ * with ESP_ERR_INVALID_RESPONSE.
  */
 
 #pragma once
@@ -55,6 +57,12 @@
 
 /** Expected value of the first byte of every BL0939 frame. */
 #define BL0939_FRAME_HEADER_VALUE 0x55U
+
+/** Maximum valid BL0939 UART device address nibble (A4..A1). */
+#define BL0939_DEVICE_ADDRESS_MAX 0x0FU
+
+/** Default BL0939 UART device address when A4..A1 are all low. */
+#define BL0939_DEVICE_ADDRESS_DEFAULT 0x00U
 
 /** BL0939 register address: channel A phase compensation (A_CORNER, 16-bit, R/W, default 0x0000). */
 #define BL0939_REG_A_CORNER 0x0CU
@@ -171,6 +179,7 @@ typedef struct
 typedef struct
 {
     uart_service_handle_t uart;                     /**< Initialized UART handle (required, must not be NULL). */
+    uint8_t device_address;                         /**< BL0939 UART device address nibble A4..A1 (0..15). */
     bl0939_calibration_t calibration;               /**< Initial calibration factors (all fields > 0). */
     bl0939_phase_compensation_t phase_compensation; /**< Initial phase compensation ({0,0} for resistive loads). */
     bl0939_current_channel_t current_channel;       /**< Channel mapped to measurements.current_a. */
@@ -238,6 +247,7 @@ typedef struct
  *
  * @retval ESP_OK               Driver initialized successfully.
  * @retval ESP_ERR_INVALID_ARG  @p config is NULL, uart handle is NULL,
+ *                              device_address is > BL0939_DEVICE_ADDRESS_MAX,
  *                              or any calibration factor is <= 0.
  * @retval ESP_ERR_INVALID_STATE Driver was already initialized.
  */
@@ -294,7 +304,8 @@ esp_err_t bl0939_request_packet(void);
  * If bl0939_config_t::auto_request_before_read is true, a request command
  * is sent before waiting for the frame.
  *
- * Frame validation (header byte == 0x55, checksum match) is always performed.
+ * Frame validation (header byte == 0x55, checksum match)
+ * is always performed.
  * A frame that fails either check is discarded and ESP_ERR_INVALID_RESPONSE
  * is returned; no partial data is written to @p out_raw.
  *
