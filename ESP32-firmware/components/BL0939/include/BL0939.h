@@ -183,7 +183,7 @@ typedef struct
     bl0939_calibration_t calibration;               /**< Initial calibration factors (all fields > 0). */
     bl0939_phase_compensation_t phase_compensation; /**< Initial phase compensation ({0,0} for resistive loads). */
     bl0939_current_channel_t current_channel;       /**< Channel mapped to measurements.current_a. */
-    uint32_t default_timeout_ms;                    /**< Timeout used when BL0939_TIMEOUT_USE_DEFAULT is passed (must be > 0). */
+    uint32_t default_timeout_ms;                    /**< Timeout for read operations; not used for writes (must be > 0). */
     bool auto_request_before_read;                  /**< When true, read APIs send a request command before receiving. */
 } bl0939_config_t;
 
@@ -209,6 +209,8 @@ typedef struct
     uint32_t ia_rms; /**< Raw RMS count for current channel A. */
     uint32_t ib_rms; /**< Raw RMS count for current channel B. */
     uint32_t v_rms;  /**< Raw RMS count for voltage. */
+    int32_t a_watt;  /**< Active power register for channel A (signed). */
+    int32_t b_watt;  /**< Active power register for channel B (signed). */
     int32_t cfa_cnt; /**< CF pulse count, channel A (signed; negative = reverse flow). */
     int32_t cfb_cnt; /**< CF pulse count, channel B (signed; negative = reverse flow). */
 } bl0939_raw_data_t;

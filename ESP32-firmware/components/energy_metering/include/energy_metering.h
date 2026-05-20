@@ -7,55 +7,75 @@
 #include <stdint.h>
 
 /** Calibration and physical constants for one meter instance. */
-typedef struct {
+typedef struct
+{
     /* Voltage channel */
-    float vrms_scale;           /**< BL0939 Vrms full-scale count (default 79931) */
-    float vref;                 /**< Internal Vref, volts (default 1.218) */
-    float divider_ratio;        /**< External resistor-divider ratio (Vmains / Vpin) */
-    float vac_fine_gain;        /**< Empirical trim for voltage channel */
-    uint32_t vrms_zero_offset;  /**< ADC offset counts to subtract before scaling */
-    float vac_noise_floor_v;    /**< Readings below this are clamped to 0 V */
+    float vrms_scale;          /**< BL0939 Vrms full-scale count (default 79931) */
+    float vref;                /**< Internal Vref, volts (default 1.218) */
+    float divider_ratio;       /**< External resistor-divider ratio (Vmains / Vpin) */
+    float vac_fine_gain;       /**< Empirical trim for voltage channel */
+    uint32_t vrms_zero_offset; /**< ADC offset counts to subtract before scaling */
+    float vac_noise_floor_v;   /**< Readings below this are clamped to 0 V */
 
     /* Current channel */
-    float irms_scale;           /**< BL0939 Irms full-scale count (default 324004) */
-    float ia_pin_fine_gain;     /**< Empirical trim for current sense amp */
-    float ia_cal_a_per_mv;      /**< Current in A per mV at the sense pin */
-    float ia_noise_floor_a;     /**< Readings below this are clamped to 0 A */
-    float vp_noise_floor_mv;    /**< Sense-pin voltage noise floor, mV */
+    float irms_scale;        /**< BL0939 Irms full-scale count (default 324004) */
+    float ia_pin_fine_gain;  /**< Empirical trim for current sense amp */
+    float ia_cal_a_per_mv;   /**< Current in A per mV at the sense pin */
+    float ia_noise_floor_a;  /**< Readings below this are clamped to 0 A */
+    float vp_noise_floor_mv; /**< Sense-pin voltage noise floor, mV */
 
     /* Energy pulse counters */
-    float energy_ref;           /**< BL0939 energy reference (default 3304) */
-    float cf_count_scale;       /**< CF count scale factor (default 20000) */
+    float energy_ref;     /**< BL0939 energy reference (default 3304) */
+    float cf_count_scale; /**< CF count scale factor (default 20000) */
 } energy_metering_calibration_t;
 
 /** Convenience initializer - matches the constants in the original main.c. */
-#define ENERGY_METERING_CALIBRATION_DEFAULT() {     \
-    .vrms_scale        = 79931.0f,                  \
-    .vref              = 1.218f,                    \
-    .divider_ratio     = (230.0f / 0.062f),         \
-    .vac_fine_gain     = 0.956f,                    \
-    .vrms_zero_offset  = 2720U,                     \
-    .vac_noise_floor_v = 0.5f,                      \
-    .irms_scale        = 324004.0f,                 \
-    .ia_pin_fine_gain  = 0.686f,                    \
-    .ia_cal_a_per_mv   = (0.4347f / 12.0f),         \
-    .ia_noise_floor_a  = 0.003f,                    \
-    .vp_noise_floor_mv = 0.2f,                      \
-    .energy_ref        = 3304.0f,                   \
-    .cf_count_scale    = 20000.0f,                  \
+#define ENERGY_METERING_CALIBRATION_DEFAULT() { \
+    .vrms_scale = 79931.0f,                     \
+    .vref = 1.218f,                             \
+    .divider_ratio = (230.0f / 0.062f),         \
+    .vac_fine_gain = 0.956f,                    \
+    .vrms_zero_offset = 2720U,                  \
+    .vac_noise_floor_v = 0.5f,                  \
+    .irms_scale = 324004.0f,                    \
+    .ia_pin_fine_gain = 0.686f,                 \
+    .ia_cal_a_per_mv = (0.4347f / 12.0f),       \
+    .ia_noise_floor_a = 0.003f,                 \
+    .vp_noise_floor_mv = 0.2f,                  \
+    .energy_ref = 3304.0f,                      \
+    .cf_count_scale = 20000.0f,                 \
 }
 
 /** Driver configuration passed to energy_metering_init(). */
-typedef struct {
+typedef struct
+{
     energy_metering_calibration_t calibration;
 } energy_metering_config_t;
 
 /** Processed measurement ready for application use. */
-typedef struct {
+typedef struct
+{
     float voltage_v;        /**< RMS mains voltage, volts */
     float current_a;        /**< RMS load current, amps */
     float total_energy_kwh; /**< Accumulated energy since init or last reset, kWh */
 } energy_metering_data_t;
+
+/** Dedicated background task configuration. */
+typedef struct
+{
+    const char *task_name; /**< FreeRTOS task name (NULL -> default "energy_meter") */
+    uint32_t stack_size;   /**< Stack size in bytes */
+    uint32_t priority;     /**< FreeRTOS task priority */
+    uint32_t period_ms;    /**< Polling period for energy_metering_read() */
+} energy_metering_task_config_t;
+
+/** Reasonable defaults for the dedicated background task. */
+#define ENERGY_METERING_TASK_CONFIG_DEFAULT() { \
+    .task_name = "energy_meter",                \
+    .stack_size = 4096U,                        \
+    .priority = 5U,                             \
+    .period_ms = 1000U,                         \
+}
 
 /**
  * Initialise the energy_metering driver.
@@ -77,16 +97,57 @@ esp_err_t energy_metering_init(const energy_metering_config_t *config);
  * The first call after init seeds the CFA/CFB counters and returns 0 kWh;
  * subsequent calls return the delta since the previous call.
  *
+ * If the dedicated background task is running, direct reads are allowed only
+ * from that task to avoid concurrent BL0939 access.
+ *
  * @param[out] out  Populated on ESP_OK.
  * @param      timeout_ms  Passed to bl0939_read_raw(); use BL0939_TIMEOUT_USE_DEFAULT.
- * @return     ESP_OK, or propagates errors from bl0939_read_raw().
+ * @return     ESP_OK, ESP_ERR_INVALID_STATE when called from a different task
+ *             while background sampling is active, or propagates errors from
+ *             bl0939_read_raw().
  */
 esp_err_t energy_metering_read(energy_metering_data_t *out, uint32_t timeout_ms);
+
+/**
+ * Get the latest value produced by energy_metering_read().
+ *
+ * Useful when the dedicated background task is running and other tasks
+ * need the newest sample without touching the BL0939 bus.
+ *
+ * @param[out] out  Receives the latest processed reading.
+ * @return     ESP_OK on success, ESP_ERR_INVALID_STATE if no sample exists yet.
+ */
+esp_err_t energy_metering_get_latest(energy_metering_data_t *out);
+
+/**
+ * Start a dedicated background task that periodically calls energy_metering_read().
+ *
+ * @param config  Task settings (must be non-NULL).
+ * @return        ESP_OK on success, ESP_ERR_INVALID_STATE if already running.
+ */
+esp_err_t energy_metering_start_task(const energy_metering_task_config_t *config);
+
+/**
+ * Stop the dedicated background task.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if not running.
+ */
+esp_err_t energy_metering_stop_task(void);
 
 /**
  * Reset the accumulated energy counter to zero.
  *
  * The CFA/CFB baseline is re-seeded on the next energy_metering_read() call.
- * Safe to call from any task if external locking is provided.
+ * Thread-safe to call from any task.
  */
 void energy_metering_reset_energy(void);
+
+/**
+ * Deinitialize the driver and release resources.
+ *
+ * Stops the background task if running, then releases the mutex.
+ * After this, energy_metering_init() can be called again.
+ *
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE if not initialized.
+ */
+esp_err_t energy_metering_deinit(void);

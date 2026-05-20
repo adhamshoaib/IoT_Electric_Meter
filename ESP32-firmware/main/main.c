@@ -99,13 +99,27 @@ void app_main(void)
         return;
     }
 
+    const energy_metering_task_config_t em_task_cfg = {
+        .task_name = "energy_meter_task",
+        .stack_size = 4096U,
+        .priority = 5U,
+        .period_ms = BL0939_READ_PERIOD_MS,
+    };
+
+    ret = energy_metering_start_task(&em_task_cfg);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Energy metering task start failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
     ESP_LOGI(TAG, "BL0939 meter started (UART%d TX=%d RX=%d ADDR=%u)",
              BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
 
     while (true)
     {
         energy_metering_data_t m;
-        ret = energy_metering_read(&m, BL0939_TIMEOUT_USE_DEFAULT);
+        ret = energy_metering_get_latest(&m);
         if (ret == ESP_OK)
         {
             ESP_LOGI(TAG,
@@ -116,7 +130,7 @@ void app_main(void)
         }
         else
         {
-            ESP_LOGW(TAG, "energy_metering_read failed: %s", esp_err_to_name(ret));
+            ESP_LOGW(TAG, "energy_metering_get_latest failed: %s", esp_err_to_name(ret));
         }
 
         vTaskDelay(pdMS_TO_TICKS(BL0939_READ_PERIOD_MS));

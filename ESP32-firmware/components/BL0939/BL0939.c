@@ -28,6 +28,8 @@
 #define FRAME_OFFSET_IA_RMS 4U
 #define FRAME_OFFSET_IB_RMS 7U
 #define FRAME_OFFSET_V_RMS 10U
+#define FRAME_OFFSET_A_WATT 16U
+#define FRAME_OFFSET_B_WATT 19U
 #define FRAME_OFFSET_CFA_CNT 22U
 #define FRAME_OFFSET_CFB_CNT 25U
 #define FRAME_CHECKSUM_INDEX (BL0939_FRAME_SIZE_BYTES - 1U)
@@ -161,15 +163,15 @@ static bool frame_header_is_valid(uint8_t header)
     return header == BL0939_FRAME_HEADER_VALUE || header == 0x58U;
 }
 
+static const char *alt_header_note =
+    "0x58 is accepted as an alternate frame header. Some BL0939 variants or "
+    "firmware revisions emit this instead of the standard 0x55.";
+
 static uint32_t decode_u24_le(const uint8_t *p)
 {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
 }
 
-/* FIX (decode_s24_le): The previous implementation sign-extended by OR-ing into a uint32_t
- * and then casting to int32_t, which is implementation-defined behavior in C for values that
- * do not fit the signed type's range.  We now use a union to reinterpret the bit pattern,
- * which is well-defined in C99 and later. */
 static int32_t decode_s24_le(const uint8_t *p)
 {
     uint32_t raw = decode_u24_le(p);
@@ -177,14 +179,7 @@ static int32_t decode_s24_le(const uint8_t *p)
     {
         raw |= 0xFF000000U;
     }
-
-    union
-    {
-        uint32_t u;
-        int32_t s;
-    } conv;
-    conv.u = raw;
-    return conv.s;
+    return (int32_t)raw;
 }
 
 static esp_err_t uart_send_with_timeout(const uint8_t *data, size_t len, uint32_t timeout_ms)
@@ -192,6 +187,10 @@ static esp_err_t uart_send_with_timeout(const uint8_t *data, size_t len, uint32_
     (void)timeout_ms;
     return uart_service_send(s_bl0939.uart, data, len);
 }
+
+static const char *timeout_not_used_note =
+    "timeout_ms is retained for API consistency but not used for UART sends. "
+    "UART transmission is fast and buffered; the underlying driver handles timing internally.";
 
 static esp_err_t set_uart_line_inverse_mask(uint32_t inverse_mask)
 {
@@ -212,9 +211,6 @@ static esp_err_t write_register_bytes(uint8_t reg, uint8_t data0, uint8_t data1,
     packet[3] = data1;
     packet[4] = data2;
 
-    /* FIX (write_register_bytes checksum): Use the named constant
-     * BL0939_WRITE_PACKET_CHECKSUM_COVER instead of a raw expression so that
-     * the covered range stays correct if the packet size constant ever changes. */
     uint8_t checksum = 0U;
     for (size_t i = 0; i < BL0939_WRITE_PACKET_CHECKSUM_COVER; i++)
     {
@@ -314,10 +310,6 @@ static bool frame_is_valid(const uint8_t *frame)
     return checksum == frame[FRAME_CHECKSUM_INDEX];
 }
 
-/* FIX (read_frame timeout handling):
- * - Respect the caller timeout by capping each uart_service_read() wait to the
- *   remaining budget (and a short poll cap).
- * - Ensure sub-tick non-zero timeouts do not collapse to zero ticks. */
 static esp_err_t read_frame(uint8_t *frame, uint32_t timeout_ms)
 {
     uint8_t chunk[64];
@@ -459,19 +451,6 @@ static esp_err_t attempt_inversion_recovery(uint8_t *frame, uint32_t timeout_ms)
             continue;
         }
 
-        /* FIX (attempt_inversion_recovery): Previously, inverse_candidates[0] equals
-         * original_mask, so the inner skip condition
-         *   (candidate_mask == original_mask && candidate_address == original_device_address)
-         * fired for every address in the first outer iteration, meaning the original mask
-         * was never probed with any address other than the current one.
-         *
-         * The fix separates the two concerns:
-         *   - cmd_step == 0  → original address (always tried, regardless of mask)
-         *   - cmd_step  > 0  → remaining addresses 0..BL0939_DEVICE_ADDRESS_MAX
-         *
-         * The (mask, address) pair that matches the currently-configured combination is
-         * skipped because it was already attempted by the caller before recovery was
-         * triggered; all other combinations are probed. */
         for (uint16_t cmd_step = 0U; cmd_step <= (uint16_t)BL0939_DEVICE_ADDRESS_MAX + 1U; cmd_step++)
         {
             uint8_t candidate_address;
@@ -517,9 +496,6 @@ static esp_err_t attempt_inversion_recovery(uint8_t *frame, uint32_t timeout_ms)
                 }
             }
 
-            /* FIX (flush error logging): Previously flush errors were silently discarded.
-             * Log them in diagnostic mode so they appear in field logs. The flush failure
-             * is non-fatal for the recovery attempt; we still try to read. */
             ret = uart_service_flush_input(s_bl0939.uart);
 #if BL0939_ENABLE_UART_DIAGNOSTICS
             if (ret != ESP_OK)
@@ -642,8 +618,6 @@ esp_err_t bl0939_init(const bl0939_config_t *config)
         }
     }
 
-    /* FIX (bl0939_init flush error logging): flush errors were silently discarded.
-     * Log them so they are visible in diagnostics; the flush is best-effort at init. */
     ret = uart_service_flush_input(s_bl0939.uart);
 #if BL0939_ENABLE_UART_DIAGNOSTICS
     if (ret != ESP_OK)
@@ -752,6 +726,8 @@ esp_err_t bl0939_read_raw(bl0939_raw_data_t *out_raw, uint32_t timeout_ms)
     raw.ia_rms = decode_u24_le(&frame[FRAME_OFFSET_IA_RMS]);
     raw.ib_rms = decode_u24_le(&frame[FRAME_OFFSET_IB_RMS]);
     raw.v_rms = decode_u24_le(&frame[FRAME_OFFSET_V_RMS]);
+    raw.a_watt = decode_s24_le(&frame[FRAME_OFFSET_A_WATT]);
+    raw.b_watt = decode_s24_le(&frame[FRAME_OFFSET_B_WATT]);
     raw.cfa_cnt = decode_s24_le(&frame[FRAME_OFFSET_CFA_CNT]);
     raw.cfb_cnt = decode_s24_le(&frame[FRAME_OFFSET_CFB_CNT]);
 
