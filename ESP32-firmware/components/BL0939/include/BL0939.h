@@ -183,7 +183,7 @@ typedef struct
     bl0939_calibration_t calibration;               /**< Initial calibration factors (all fields > 0). */
     bl0939_phase_compensation_t phase_compensation; /**< Initial phase compensation ({0,0} for resistive loads). */
     bl0939_current_channel_t current_channel;       /**< Channel mapped to measurements.current_a. */
-    uint32_t default_timeout_ms;                    /**< Timeout used when BL0939_TIMEOUT_USE_DEFAULT is passed. */
+    uint32_t default_timeout_ms;                    /**< Timeout used when BL0939_TIMEOUT_USE_DEFAULT is passed (must be > 0). */
     bool auto_request_before_read;                  /**< When true, read APIs send a request command before receiving. */
 } bl0939_config_t;
 
@@ -248,7 +248,8 @@ typedef struct
  * @retval ESP_OK               Driver initialized successfully.
  * @retval ESP_ERR_INVALID_ARG  @p config is NULL, uart handle is NULL,
  *                              device_address is > BL0939_DEVICE_ADDRESS_MAX,
- *                              or any calibration factor is <= 0.
+ *                              any calibration factor is <= 0,
+ *                              or default_timeout_ms is 0.
  * @retval ESP_ERR_INVALID_STATE Driver was already initialized.
  */
 esp_err_t bl0939_init(const bl0939_config_t *config);

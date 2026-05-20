@@ -1,5 +1,6 @@
 #include "BL0939.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -7,7 +8,7 @@
 #include "freertos/task.h"
 
 #define BL0939_ENABLE_UART_DIAGNOSTICS 1
-#define BL0939_ENABLE_INVERSION_RECOVERY 1
+#define BL0939_ENABLE_INVERSION_RECOVERY 0
 
 #define BL0939_CMD_READ_REQUEST_BASE 0x50U
 #define BL0939_CMD_READ_FULL_PACKET 0xAAU
@@ -19,6 +20,10 @@
 
 #define BL0939_UART_STOP_BITS UART_STOP_BITS_2
 #define BL0939_UART_INVERSE_MASK UART_SIGNAL_INV_DISABLE
+#define BL0939_AUTO_REQUEST_ATTEMPTS 2U
+#define BL0939_UART_READ_POLL_MS 40U
+#define BL0939_INIT_INTER_CMD_DELAY_MS 2U
+#define BL0939_INIT_POST_RESET_DELAY_MS 10U
 
 #define FRAME_OFFSET_IA_RMS 4U
 #define FRAME_OFFSET_IB_RMS 7U
@@ -57,15 +62,16 @@ static bl0939_state_t s_bl0939 = {.initialized = false};
  * 0x19 - USR_WRPROT:  unlock write protection (0x5A5A5A)
  * 0x1A - Mode:        operating mode / gain configuration
  * 0x18 - TPS_CTRL:    TPS / zero-crossing control
- * 0x1B - SOFT_RESET:  soft reset (write 0x47FF00 to reset, then re-init)
+ * 0x1B - SOFT_RESET:  soft reset (write 0x47FF00, LSB-first on UART)
  * 0x10 - A_PHASE:     phase compensation for channel A
  * 0x1E - B_PHASE:     phase compensation for channel B
  */
 static const bl0939_init_cmd_t s_init_cmds[] = {
-    {0x19U, 0x5AU, 0x5AU, 0x5AU}, /* USR_WRPROT: unlock */
+    {0x19U, 0x5AU, 0x5AU, 0x5AU}, /* USR_WRPROT: unlock before reset */
+    {0x1BU, 0x00U, 0xFFU, 0x47U}, /* SOFT_RESET: 0x47FF00 (LSB-first) */
+    {0x19U, 0x5AU, 0x5AU, 0x5AU}, /* USR_WRPROT: unlock again after reset */
     {0x1AU, 0x55U, 0x00U, 0x00U}, /* Mode: default gain */
     {0x18U, 0x00U, 0x10U, 0x00U}, /* TPS_CTRL */
-    {0x1BU, 0xFFU, 0x47U, 0x00U}, /* SOFT_RESET */
     {0x10U, 0x1CU, 0x18U, 0x00U}, /* A_PHASE */
     {0x1EU, 0x1CU, 0x18U, 0x00U}, /* B_PHASE */
 };
@@ -78,6 +84,11 @@ static bool calibration_is_valid(const bl0939_calibration_t *c)
 static bool device_address_is_valid(uint8_t device_address)
 {
     return device_address <= BL0939_DEVICE_ADDRESS_MAX;
+}
+
+static bool phase_compensation_is_zero(const bl0939_phase_compensation_t *comp)
+{
+    return comp != NULL && comp->corner_a == 0U && comp->corner_b == 0U;
 }
 
 static uint8_t read_command_from_address(uint8_t device_address)
@@ -112,6 +123,34 @@ static uint32_t resolve_timeout(uint32_t timeout_ms)
     return (timeout_ms == BL0939_TIMEOUT_USE_DEFAULT) ? s_bl0939.default_timeout_ms : timeout_ms;
 }
 
+static TickType_t timeout_ms_to_ticks(uint32_t timeout_ms)
+{
+    TickType_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
+    if (timeout_ms > 0U && timeout_ticks == 0U)
+    {
+        timeout_ticks = 1U;
+    }
+
+    return timeout_ticks;
+}
+
+static uint32_t ticks_to_ms_ceil(TickType_t ticks)
+{
+    if (ticks == 0U)
+    {
+        return 0U;
+    }
+
+    uint64_t ms = ((uint64_t)ticks * 1000ULL + (uint64_t)configTICK_RATE_HZ - 1ULL) /
+                  (uint64_t)configTICK_RATE_HZ;
+    if (ms > UINT32_MAX)
+    {
+        return UINT32_MAX;
+    }
+
+    return (uint32_t)ms;
+}
+
 static uint8_t write_command_from_read(void)
 {
     return (uint8_t)(BL0939_CMD_WRITE_BASE | (s_bl0939.read_command & 0x0FU));
@@ -119,7 +158,7 @@ static uint8_t write_command_from_read(void)
 
 static bool frame_header_is_valid(uint8_t header)
 {
-    return header == BL0939_FRAME_HEADER_VALUE;
+    return header == BL0939_FRAME_HEADER_VALUE || header == 0x58U;
 }
 
 static uint32_t decode_u24_le(const uint8_t *p)
@@ -235,7 +274,10 @@ static esp_err_t run_init_sequence(uint32_t timeout_ms)
             return ret;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(2U));
+        const uint32_t delay_ms = (s_init_cmds[i].reg == 0x1BU)
+                                      ? BL0939_INIT_POST_RESET_DELAY_MS
+                                      : BL0939_INIT_INTER_CMD_DELAY_MS;
+        vTaskDelay(timeout_ms_to_ticks(delay_ms));
     }
 
     return ESP_OK;
@@ -272,88 +314,40 @@ static bool frame_is_valid(const uint8_t *frame)
     return checksum == frame[FRAME_CHECKSUM_INDEX];
 }
 
-/* FIX (read_frame timeout arithmetic): The previous code cast elapsed_ms (uint64_t) to
- * uint32_t before the subtraction.  On a long-running system where elapsed_ms exceeds
- * UINT32_MAX (~49 days at 1 ms/tick) the truncated value could wrap to a value smaller
- * than timeout_ms, producing a wildly incorrect remaining_timeout.  We now saturate the
- * subtraction: if elapsed_ms >= timeout_ms we have already returned ESP_ERR_TIMEOUT, so
- * the remaining value is guaranteed to fit in uint32_t at the point of use. */
+/* FIX (read_frame timeout handling):
+ * - Respect the caller timeout by capping each uart_service_read() wait to the
+ *   remaining budget (and a short poll cap).
+ * - Ensure sub-tick non-zero timeouts do not collapse to zero ticks. */
 static esp_err_t read_frame(uint8_t *frame, uint32_t timeout_ms)
 {
+    uint8_t chunk[64];
     size_t total_read = 0U;
     size_t dropped_until_header = 0U;
     TickType_t start_tick = xTaskGetTickCount();
+    TickType_t timeout_ticks = timeout_ms_to_ticks(timeout_ms);
 
-    while (total_read < BL0939_FRAME_SIZE_BYTES)
+    while ((xTaskGetTickCount() - start_tick) < timeout_ticks)
     {
-        uint32_t remaining_timeout_ms = 0U;
-        if (timeout_ms > 0U)
+        TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
+        TickType_t remaining_ticks = timeout_ticks - elapsed_ticks;
+        uint32_t remaining_ms = ticks_to_ms_ceil(remaining_ticks);
+        uint32_t read_timeout_ms = remaining_ms;
+        if (read_timeout_ms > BL0939_UART_READ_POLL_MS)
         {
-            TickType_t elapsed_ticks = xTaskGetTickCount() - start_tick;
-            uint64_t elapsed_ms = (uint64_t)elapsed_ticks * (uint64_t)portTICK_PERIOD_MS;
-            if (elapsed_ms >= (uint64_t)timeout_ms)
-            {
-#if BL0939_ENABLE_UART_DIAGNOSTICS
-                ESP_LOGW(TAG, "Frame read timeout after %u/%u byte(s)",
-                         (unsigned)total_read,
-                         (unsigned)BL0939_FRAME_SIZE_BYTES);
-#endif
-                return ESP_ERR_TIMEOUT;
-            }
-            /* elapsed_ms < timeout_ms here, so the difference fits in uint32_t. */
-            remaining_timeout_ms = (uint32_t)((uint64_t)timeout_ms - elapsed_ms);
+            read_timeout_ms = BL0939_UART_READ_POLL_MS;
+        }
+        if (read_timeout_ms == 0U)
+        {
+            read_timeout_ms = 1U;
         }
 
         size_t chunk_len = 0U;
-        esp_err_t ret;
-
-        if (total_read == 0U)
-        {
-            uint8_t first = 0U;
-            ret = uart_service_read(
-                s_bl0939.uart,
-                &first,
-                1U,
-                &chunk_len,
-                remaining_timeout_ms);
-            if (ret != ESP_OK)
-            {
-                return ret;
-            }
-            if (chunk_len == 0U)
-            {
-#if BL0939_ENABLE_UART_DIAGNOSTICS
-                ESP_LOGW(TAG,
-                         "Frame read timeout waiting for valid header (dropped=%u)",
-                         (unsigned)dropped_until_header);
-#endif
-                return ESP_ERR_TIMEOUT;
-            }
-
-            if (!frame_header_is_valid(first))
-            {
-                dropped_until_header++;
-                continue;
-            }
-
-#if BL0939_ENABLE_UART_DIAGNOSTICS
-            if (dropped_until_header > 0U)
-            {
-                ESP_LOGW(TAG, "Dropped %u byte(s) before frame header sync", (unsigned)dropped_until_header);
-            }
-#endif
-
-            frame[0] = first;
-            total_read = 1U;
-            continue;
-        }
-
-        ret = uart_service_read(
+        esp_err_t ret = uart_service_read(
             s_bl0939.uart,
-            &frame[total_read],
-            BL0939_FRAME_SIZE_BYTES - total_read,
+            chunk,
+            sizeof(chunk),
             &chunk_len,
-            remaining_timeout_ms);
+            read_timeout_ms);
         if (ret != ESP_OK)
         {
             return ret;
@@ -361,21 +355,51 @@ static esp_err_t read_frame(uint8_t *frame, uint32_t timeout_ms)
 
         if (chunk_len == 0U)
         {
-#if BL0939_ENABLE_UART_DIAGNOSTICS
-            ESP_LOGW(TAG,
-                     "Frame read timeout after header (%u/%u byte(s))",
-                     (unsigned)total_read,
-                     (unsigned)BL0939_FRAME_SIZE_BYTES);
-#endif
-            return ESP_ERR_TIMEOUT;
+            continue;
         }
 
-        total_read += chunk_len;
+        for (size_t i = 0; i < chunk_len; i++)
+        {
+            uint8_t b = chunk[i];
+
+            if (total_read == 0U && !frame_header_is_valid(b))
+            {
+                dropped_until_header++;
+                continue;
+            }
+
+            frame[total_read++] = b;
+            if (total_read == BL0939_FRAME_SIZE_BYTES)
+            {
+#if BL0939_ENABLE_UART_DIAGNOSTICS
+                if (dropped_until_header > 0U)
+                {
+                    ESP_LOGW(TAG, "Dropped %u byte(s) before frame header sync", (unsigned)dropped_until_header);
+                }
+#endif
+                log_rx_frame(frame);
+                return ESP_OK;
+            }
+        }
     }
 
-    log_rx_frame(frame);
+#if BL0939_ENABLE_UART_DIAGNOSTICS
+    if (total_read == 0U)
+    {
+        ESP_LOGW(TAG,
+                 "Frame read timeout waiting for valid header (dropped=%u)",
+                 (unsigned)dropped_until_header);
+    }
+    else
+    {
+        ESP_LOGW(TAG,
+                 "Frame read timeout after header (%u/%u byte(s))",
+                 (unsigned)total_read,
+                 (unsigned)BL0939_FRAME_SIZE_BYTES);
+    }
+#endif
 
-    return ESP_OK;
+    return ESP_ERR_TIMEOUT;
 }
 
 static bool should_try_inversion_recovery(esp_err_t err)
@@ -476,18 +500,21 @@ static esp_err_t attempt_inversion_recovery(uint8_t *frame, uint32_t timeout_ms)
                 continue;
             }
 
-            ret = write_register_u16(BL0939_REG_A_CORNER, s_bl0939.phase_compensation.corner_a, timeout_ms);
-            if (ret != ESP_OK)
+            if (!phase_compensation_is_zero(&s_bl0939.phase_compensation))
             {
-                last_err = ret;
-                continue;
-            }
+                ret = write_register_u16(BL0939_REG_A_CORNER, s_bl0939.phase_compensation.corner_a, timeout_ms);
+                if (ret != ESP_OK)
+                {
+                    last_err = ret;
+                    continue;
+                }
 
-            ret = write_register_u16(BL0939_REG_B_CORNER, s_bl0939.phase_compensation.corner_b, timeout_ms);
-            if (ret != ESP_OK)
-            {
-                last_err = ret;
-                continue;
+                ret = write_register_u16(BL0939_REG_B_CORNER, s_bl0939.phase_compensation.corner_b, timeout_ms);
+                if (ret != ESP_OK)
+                {
+                    last_err = ret;
+                    continue;
+                }
             }
 
             /* FIX (flush error logging): Previously flush errors were silently discarded.
@@ -558,6 +585,7 @@ esp_err_t bl0939_init(const bl0939_config_t *config)
 
     if (config == NULL || config->uart == NULL || !calibration_is_valid(&config->calibration) ||
         !device_address_is_valid(config->device_address) ||
+        config->default_timeout_ms == 0U ||
         (int)config->current_channel < (int)BL0939_CURRENT_CHANNEL_IA ||
         (int)config->current_channel > (int)BL0939_CURRENT_CHANNEL_SUM)
     {
@@ -576,7 +604,7 @@ esp_err_t bl0939_init(const bl0939_config_t *config)
 
 #if BL0939_ENABLE_UART_DIAGNOSTICS
     ESP_LOGI(TAG,
-             "Init with addr=%u cmd=0x%02X stop=1.5",
+             "Init with addr=%u cmd=0x%02X",
              (unsigned)s_bl0939.device_address,
              (unsigned)s_bl0939.read_command);
 #endif
@@ -593,22 +621,25 @@ esp_err_t bl0939_init(const bl0939_config_t *config)
         return ret;
     }
 
-    ret = write_register_u16(
-        BL0939_REG_A_CORNER,
-        config->phase_compensation.corner_a,
-        config->default_timeout_ms);
-    if (ret != ESP_OK)
+    if (!phase_compensation_is_zero(&config->phase_compensation))
     {
-        return ret;
-    }
+        ret = write_register_u16(
+            BL0939_REG_A_CORNER,
+            config->phase_compensation.corner_a,
+            config->default_timeout_ms);
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
 
-    ret = write_register_u16(
-        BL0939_REG_B_CORNER,
-        config->phase_compensation.corner_b,
-        config->default_timeout_ms);
-    if (ret != ESP_OK)
-    {
-        return ret;
+        ret = write_register_u16(
+            BL0939_REG_B_CORNER,
+            config->phase_compensation.corner_b,
+            config->default_timeout_ms);
+        if (ret != ESP_OK)
+        {
+            return ret;
+        }
     }
 
     /* FIX (bl0939_init flush error logging): flush errors were silently discarded.
@@ -668,37 +699,42 @@ esp_err_t bl0939_read_raw(bl0939_raw_data_t *out_raw, uint32_t timeout_ms)
 
     uint32_t resolved_timeout_ms = resolve_timeout(timeout_ms);
 
-    if (s_bl0939.auto_request_before_read)
-    {
-        esp_err_t ret = uart_service_flush_input(s_bl0939.uart);
-#if BL0939_ENABLE_UART_DIAGNOSTICS
-        if (ret != ESP_OK)
-        {
-            ESP_LOGW(TAG, "Input flush failed before read: %s", esp_err_to_name(ret));
-        }
-#endif
-        if (ret != ESP_OK)
-        {
-            return ret;
-        }
-
-        ret = bl0939_request_packet();
-        if (ret != ESP_OK)
-        {
-            return ret;
-        }
-    }
-
     uint8_t frame[BL0939_FRAME_SIZE_BYTES];
-    esp_err_t ret = read_frame(frame, resolved_timeout_ms);
-    esp_err_t frame_status = ret;
+    esp_err_t frame_status = ESP_ERR_TIMEOUT;
+    uint32_t read_attempts = s_bl0939.auto_request_before_read ? BL0939_AUTO_REQUEST_ATTEMPTS : 1U;
 
-    if (ret == ESP_OK && !frame_is_valid(frame))
+    for (uint32_t attempt = 0U; attempt < read_attempts; attempt++)
     {
-        frame_status = ESP_ERR_INVALID_RESPONSE;
+        if (s_bl0939.auto_request_before_read)
+        {
+            esp_err_t ret = bl0939_request_packet();
+            if (ret != ESP_OK)
+            {
+                frame_status = ret;
+                break;
+            }
+        }
+
+        esp_err_t ret = read_frame(frame, resolved_timeout_ms);
+        frame_status = ret;
+        if (ret != ESP_OK)
+        {
+            continue;
+        }
+
+        if (!frame_is_valid(frame))
+        {
+            frame_status = ESP_ERR_INVALID_RESPONSE;
+            continue;
+        }
+
+        frame_status = ESP_OK;
+        break;
     }
 
-    if (frame_status != ESP_OK && s_bl0939.auto_request_before_read && should_try_inversion_recovery(frame_status))
+    if (frame_status != ESP_OK && s_bl0939.auto_request_before_read &&
+        should_try_inversion_recovery(frame_status) &&
+        (resolved_timeout_ms >= (4U * s_bl0939.default_timeout_ms)))
     {
         esp_err_t recovery_ret = attempt_inversion_recovery(frame, resolved_timeout_ms);
         if (recovery_ret == ESP_OK)
