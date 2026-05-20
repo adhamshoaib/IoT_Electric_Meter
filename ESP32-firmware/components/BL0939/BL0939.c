@@ -7,7 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define BL0939_ENABLE_UART_DIAGNOSTICS 1
+#define BL0939_ENABLE_UART_DIAGNOSTICS 0
 #define BL0939_ENABLE_INVERSION_RECOVERY 0
 
 #define BL0939_CMD_READ_REQUEST_BASE 0x50U
