@@ -30,8 +30,14 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [password, setPassword] = useState("");
 const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [liveDashboardData, setLiveDashboardData] = useState(fakeDashboardData);
+  const [liveDashboardData, setLiveDashboardData] = useState({
+  ...fakeDashboardData,
+  monthlyConsumption: 0,
+  todayConsumption: 0,
+  lastSync: 'Waiting for reading',
+});
 useEffect(() => {
+   if (!isLoggedIn) return;
   const meterRef = ref(database, 'current_reading');
 
   const unsubscribe = onValue(meterRef, (snapshot) => {
@@ -47,7 +53,7 @@ useEffect(() => {
   });
 
   return () => unsubscribe();
-}, []);
+}, [isLoggedIn]);
 const handleAuth = async () => {
   setAuthError('');
 
