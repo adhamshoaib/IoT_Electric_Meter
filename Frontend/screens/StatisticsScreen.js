@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,9 +6,12 @@ import {
   StyleSheet,
   Dimensions,
   TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BarChart } from 'react-native-chart-kit';
+import { ref, onValue } from 'firebase/database';
+import { database } from '../services/firebase';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -64,18 +67,102 @@ const calculateCost = (kwh) => {
   }
 };
 
-const lastWeekLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const lastWeekKwh = [12.4, 10.8, 13.1, 11.5, 14.2, 16.8, 15.3];
+const lastWeekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+//const lastWeekKwh = [12.4, 10.8, 13.1, 11.5, 14.2, 16.8, 15.3];
 
-const previousWeekKwh = [10.9, 10.2, 11.8, 10.7, 12.6, 14.9, 13.8];
+//const previousWeekKwh = [10.9, 10.2, 11.8, 10.7, 12.6, 14.9, 13.8];
 
 export default function StatisticsScreen({ onBack }) {
+
+const [lastWeekKwh, setLastWeekKwh] = useState([0,0,0,0,0,0,0]);
+const [previousWeekKwh, setPreviousWeekKwh] = useState([0,0,0,0,0,0,0]);
+const [monthlyHistory, setMonthlyHistory] = useState([]);
+const [isLoading, setIsLoading] = useState(true);
+
+const processWeeklyData = (readings) => {
+  const currentWeek = [0,0,0,0,0,0,0];
+  const previousWeek = [0,0,0,0,0,0,0];
+
+  // FIX: compare calendar dates (midnight), not raw ms, to avoid hour-based misclassification
+  const nowMidnight = new Date();
+  nowMidnight.setHours(0, 0, 0, 0);
+
+  readings.forEach((reading) => {
+    // FIX: use == null so readings with energy_kwh = 0 are NOT skipped
+    if (!reading.ts || reading.energy_kwh == null) return;
+
+    const dateMidnight = new Date(reading.ts * 1000);
+    dateMidnight.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.floor(
+      (nowMidnight - dateMidnight) / (1000 * 60 * 60 * 24)
+    );
+
+    const dayIndex = new Date(reading.ts * 1000).getDay();
+
+    if (diffDays < 7) {
+      currentWeek[dayIndex] += reading.energy_kwh;
+    } else if (diffDays < 14) {
+      previousWeek[dayIndex] += reading.energy_kwh;
+    }
+  });
+
+  setLastWeekKwh(currentWeek);
+  setPreviousWeekKwh(previousWeek);
+};
+
+const processMonthlyData = (readings) => {
+  const monthMap = {};
+  const now = new Date();
+
+  // Build last 6 calendar months (excluding current month)
+  for (let i = 1; i <= 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    monthMap[key] = { year: d.getFullYear(), month: d.getMonth(), kwh: 0 };
+  }
+
+  readings.forEach((reading) => {
+    if (!reading.ts || reading.energy_kwh == null) return;
+    const date = new Date(reading.ts * 1000);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (monthMap[key]) {
+      monthMap[key].kwh += reading.energy_kwh;
+    }
+  });
+
+  // Sort newest first
+  const sorted = Object.values(monthMap).sort(
+    (a, b) => b.year - a.year || b.month - a.month
+  );
+  setMonthlyHistory(sorted);
+};
+
+useEffect(() => {
+  const historyRef = ref(database, 'logs');
+
+  const unsubscribe = onValue(historyRef, (snapshot) => {
+    const data = snapshot.val();
+    if (!data) {
+      setIsLoading(false);
+      return;
+    }
+    const readings = Object.values(data);
+    processWeeklyData(readings);
+    processMonthlyData(readings);
+    setIsLoading(false);
+  });
+
+  return () => unsubscribe();
+}, []);
+
   const weekTotalKwh = lastWeekKwh.reduce((a, b) => a + b, 0);
   const previousWeekTotalKwh = previousWeekKwh.reduce((a, b) => a + b, 0);
   const weekTotalCost = calculateCost(weekTotalKwh);
-  const weekAvgKwh = weekTotalKwh / 7;
+  // FIX: divide by actual days with data, not always 7
+  const daysWithData = lastWeekKwh.filter(v => v > 0).length || 1;
+  const weekAvgKwh = weekTotalKwh / daysWithData;
   const weekMaxKwh = Math.max(...lastWeekKwh);
-  const weekMinKwh = Math.min(...lastWeekKwh);
   const weekMaxDay = lastWeekLabels[lastWeekKwh.indexOf(weekMaxKwh)];
 
   const weeklyChangePercent =
@@ -206,18 +293,65 @@ export default function StatisticsScreen({ onBack }) {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chartScrollContent}
           >
-            <BarChart
-              data={{ labels: lastWeekLabels, datasets: [{ data: lastWeekKwh }] }}
-              width={screenWidth + 160}
-              height={220}
-              chartConfig={chartConfig}
-              style={styles.chart}
-              withInnerLines={false}
-              showValuesOnTopOfBars
-              segments={4}
-              fromZero
-            />
+            {isLoading ? (
+              <View style={styles.chartLoader}>
+                <ActivityIndicator size="small" color="#0f766e" />
+                <Text style={styles.chartLoaderText}>Loading chart...</Text>
+              </View>
+            ) : (
+              <BarChart
+                data={{ labels: lastWeekLabels, datasets: [{ data: lastWeekKwh }] }}
+                width={screenWidth + 160}
+                height={220}
+                chartConfig={chartConfig}
+                style={styles.chart}
+                withInnerLines={false}
+                showValuesOnTopOfBars
+                segments={4}
+                fromZero
+              />
+            )}
           </ScrollView>
+        </View>
+
+        {/* ── Monthly History Card ── */}
+        <View style={styles.monthlyCard}>
+          <View style={styles.monthlyHeader}>
+            <View style={styles.projectionIconWrap}>
+              <Ionicons name="calendar-outline" size={18} color="#0f766e" />
+            </View>
+            <View style={styles.projectionTextWrap}>
+              <Text style={styles.sectionTitle}>Previous Months</Text>
+              <Text style={styles.sectionSubtext}>Last 6 months from your meter</Text>
+            </View>
+          </View>
+
+          {isLoading ? (
+            <ActivityIndicator size="small" color="#0f766e" style={{ marginVertical: 16 }} />
+          ) : monthlyHistory.length === 0 ? (
+            <Text style={styles.monthlyEmpty}>No historical data available yet.</Text>
+          ) : (
+            monthlyHistory.map((item, index) => {
+              const monthName = new Date(item.year, item.month, 1).toLocaleString('default', {
+                month: 'long',
+                year: 'numeric',
+              });
+              const cost = calculateCost(item.kwh);
+              const isLast = index === monthlyHistory.length - 1;
+              return (
+                <View key={`${item.year}-${item.month}`} style={[styles.monthlyRow, isLast && styles.monthlyRowLast]}>
+                  <View style={styles.monthlyDot} />
+                  <View style={styles.monthlyInfo}>
+                    <Text style={styles.monthlyName}>{monthName}</Text>
+                  </View>
+                  <View style={styles.monthlyValues}>
+                    <Text style={styles.monthlyKwh}>{item.kwh.toFixed(1)} kWh</Text>
+                    <Text style={styles.monthlyCost}>EGP {cost.toFixed(2)}</Text>
+                  </View>
+                </View>
+              );
+            })
+          )}
         </View>
 
         <View style={styles.projectionCard}>
@@ -446,10 +580,10 @@ const styles = StyleSheet.create({
     color: '#0f172a',
   },
   upValue: {
-    color: '#0f766e',
+    color: '#c2410c', // red = bad, consuming more than last week
   },
   downValue: {
-    color: '#c2410c',
+    color: '#0f766e', // green = good, consuming less than last week
   },
 
   chartCard: {
@@ -548,6 +682,85 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     color: '#64748b',
+  },
+
+  chartLoader: {
+    width: screenWidth - 40,
+    height: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  chartLoaderText: {
+    fontSize: 13,
+    color: '#64748b',
+  },
+
+  monthlyCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  monthlyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  monthlyEmpty: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
+  monthlyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: 14,
+    marginBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  monthlyRowLast: {
+    borderBottomWidth: 0,
+    marginBottom: 0,
+    paddingBottom: 0,
+  },
+  monthlyDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#0f766e',
+    marginRight: 12,
+  },
+  monthlyInfo: {
+    flex: 1,
+  },
+  monthlyName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  monthlyValues: {
+    alignItems: 'flex-end',
+  },
+  monthlyKwh: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  monthlyCost: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+    marginTop: 2,
   },
 
   sectionTitle: {
