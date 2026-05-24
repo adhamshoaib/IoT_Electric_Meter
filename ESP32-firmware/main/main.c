@@ -2,10 +2,10 @@
 #include "energy_metering.h"
 #include "uart_service.h"
 #include "oled_display.h"
+#include "i2c_service.h"
 
 #include <stdio.h>
 #include "driver/gpio.h"
-#include "driver/i2c_master.h"
 #include "driver/uart.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -15,6 +15,7 @@
 #define OLED_I2C_SDA GPIO_NUM_21
 #define OLED_I2C_SCL GPIO_NUM_22
 #define OLED_I2C_CLK_HZ 400000
+#define OLED_I2C_PORT I2C_NUM_0
 
 #define BL0939_UART_PORT UART_NUM_2
 #define BL0939_UART_TX_PIN GPIO_NUM_17
@@ -122,26 +123,17 @@ void app_main(void)
     ESP_LOGI(TAG, "BL0939 meter started (UART%d TX=%d RX=%d ADDR=%u)",
              BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
 
-    i2c_master_bus_handle_t i2c_bus = NULL;
-    const i2c_master_bus_config_t bus_cfg = {
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = -1,
-        .scl_io_num = OLED_I2C_SCL,
-        .sda_io_num = OLED_I2C_SDA,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-
-    ret = i2c_new_master_bus(&bus_cfg, &i2c_bus);
+    ret = i2c_service_init(OLED_I2C_PORT, OLED_I2C_SDA, OLED_I2C_SCL, OLED_I2C_CLK_HZ);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "I2C bus init failed: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "I2C service init failed: %s", esp_err_to_name(ret));
     }
+
     bool oled_ok = false;
     oled_display_handle_t oled;
     if (ret == ESP_OK)
     {
-        ret = oled_display_init(i2c_bus, &oled);
+        ret = oled_display_init(&oled);
         if (ret == ESP_OK)
         {
             vTaskDelay(pdMS_TO_TICKS(100));

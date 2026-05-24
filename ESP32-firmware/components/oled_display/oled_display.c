@@ -1,9 +1,10 @@
 /**
  * @file oled_display.c
- * @brief SSD1306 OLED display driver using new I2C master driver.
+ * @brief SSD1306 OLED display driver using i2c_service.
  */
 
 #include "oled_display.h"
+#include "i2c_service.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -13,21 +14,22 @@
 
 static const char *TAG = "oled_display";
 
-static esp_err_t oled_send_cmd(oled_display_handle_t *handle, uint8_t cmd)
+static esp_err_t oled_send_cmd(uint8_t cmd)
 {
     uint8_t buf[2] = {0x00, cmd};
-    return i2c_master_transmit(handle->dev_handle, buf, sizeof(buf), -1);
+    return i2c_service_write(OLED_DISPLAY_I2C_ADDRESS, buf, sizeof(buf));
 }
 
-static esp_err_t oled_send_data(oled_display_handle_t *handle, const uint8_t *data, size_t len)
+static esp_err_t oled_send_data(const uint8_t *data, size_t len)
 {
-    uint8_t buf[129];
     if (len > 128) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    uint8_t buf[129];
     buf[0] = 0x40;
     memcpy(&buf[1], data, len);
-    return i2c_master_transmit(handle->dev_handle, buf, len + 1, -1);
+    return i2c_service_write(OLED_DISPLAY_I2C_ADDRESS, buf, len + 1);
 }
 
 static const uint8_t s_font_5x7[96][5] = {
@@ -99,7 +101,6 @@ static const uint8_t s_font_5x7[96][5] = {
     {0x20, 0x54, 0x54, 0x54, 0x78},
     {0x7F, 0x48, 0x44, 0x44, 0x38},
     {0x38, 0x44, 0x44, 0x44, 0x20},
-    {0x38, 0x44, 0x44, 0x48, 0x7F},
     {0x38, 0x54, 0x54, 0x54, 0x18},
     {0x08, 0x7E, 0x09, 0x01, 0x02},
     {0x08, 0x14, 0x54, 0x54, 0x3C},
@@ -128,7 +129,7 @@ static const uint8_t s_font_5x7[96][5] = {
     {0x08, 0x08, 0x2A, 0x1C, 0x00},
 };
 
-esp_err_t oled_display_init(i2c_master_bus_handle_t bus, oled_display_handle_t *handle)
+esp_err_t oled_display_init(oled_display_handle_t *handle)
 {
     if (handle == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -136,87 +137,75 @@ esp_err_t oled_display_init(i2c_master_bus_handle_t bus, oled_display_handle_t *
 
     memset(handle, 0, sizeof(oled_display_handle_t));
 
-    const i2c_device_config_t dev_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = OLED_DISPLAY_I2C_ADDRESS,
-        .scl_speed_hz = 400000,
-    };
-
-    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &handle->dev_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add I2C device: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    ret = oled_send_cmd(handle, 0xAE);
+    esp_err_t ret = oled_send_cmd(0xAE);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0xD5);
+    ret = oled_send_cmd(0xD5);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x80);
-    if (ret != ESP_OK) return ret;
-
-    ret = oled_send_cmd(handle, 0xA8);
-    if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x3F);
+    ret = oled_send_cmd(0x80);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0xD3);
+    ret = oled_send_cmd(0xA8);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x00);
-    if (ret != ESP_OK) return ret;
-
-    ret = oled_send_cmd(handle, 0x40);
+    ret = oled_send_cmd(0x3F);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0x8D);
+    ret = oled_send_cmd(0xD3);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x14);
+    ret = oled_send_cmd(0x00);
+    if (ret != ESP_OK) return ret;
+
+    ret = oled_send_cmd(0x40);
+    if (ret != ESP_OK) return ret;
+
+    ret = oled_send_cmd(0x8D);
+    if (ret != ESP_OK) return ret;
+    ret = oled_send_cmd(0x14);
     if (ret != ESP_OK) return ret;
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    ret = oled_send_cmd(handle, 0x20);
+    ret = oled_send_cmd(0x20);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x00);
-    if (ret != ESP_OK) return ret;
-
-    ret = oled_send_cmd(handle, 0xA0);
+    ret = oled_send_cmd(0x00);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0xC0);
+    ret = oled_send_cmd(0xA0);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0xDA);
-    if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x12);
+    ret = oled_send_cmd(0xC0);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0x81);
+    ret = oled_send_cmd(0xDA);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x7F);
-    if (ret != ESP_OK) return ret;
-
-    ret = oled_send_cmd(handle, 0xD9);
-    if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0xF1);
+    ret = oled_send_cmd(0x12);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0xDB);
+    ret = oled_send_cmd(0x81);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x40);
-    if (ret != ESP_OK) return ret;
-
-    ret = oled_send_cmd(handle, 0xA4);
+    ret = oled_send_cmd(0x7F);
     if (ret != ESP_OK) return ret;
 
-    ret = oled_send_cmd(handle, 0xA6);
+    ret = oled_send_cmd(0xD9);
+    if (ret != ESP_OK) return ret;
+    ret = oled_send_cmd(0xF1);
+    if (ret != ESP_OK) return ret;
+
+    ret = oled_send_cmd(0xDB);
+    if (ret != ESP_OK) return ret;
+    ret = oled_send_cmd(0x40);
+    if (ret != ESP_OK) return ret;
+
+    ret = oled_send_cmd(0xA4);
+    if (ret != ESP_OK) return ret;
+
+    ret = oled_send_cmd(0xA6);
     if (ret != ESP_OK) return ret;
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
-    ret = oled_send_cmd(handle, 0xAF);
+    ret = oled_send_cmd(0xAF);
     if (ret != ESP_OK) return ret;
 
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -242,7 +231,6 @@ esp_err_t oled_display_deinit(oled_display_handle_t *handle)
     }
 
     oled_display_turn_off(handle);
-    i2c_master_bus_rm_device(handle->dev_handle);
     free(handle->frame_buffer);
     memset(handle, 0, sizeof(oled_display_handle_t));
     return ESP_OK;
@@ -257,13 +245,13 @@ esp_err_t oled_display_clear(oled_display_handle_t *handle)
     uint8_t empty_row[OLED_WIDTH] = {0};
 
     for (uint8_t page = 0; page < 8; page++) {
-        esp_err_t ret = oled_send_cmd(handle, 0xB0 + page);
+        esp_err_t ret = oled_send_cmd(0xB0 + page);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(handle, 0x00);
+        ret = oled_send_cmd(0x00);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(handle, 0x10);
+        ret = oled_send_cmd(0x10);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_data(handle, empty_row, OLED_WIDTH);
+        ret = oled_send_data(empty_row, OLED_WIDTH);
         if (ret != ESP_OK) return ret;
     }
 
@@ -277,7 +265,7 @@ esp_err_t oled_display_turn_on(oled_display_handle_t *handle)
     if (handle == NULL || !handle->initialized) {
         return ESP_ERR_INVALID_ARG;
     }
-    return oled_send_cmd(handle, 0xAF);
+    return oled_send_cmd(0xAF);
 }
 
 esp_err_t oled_display_turn_off(oled_display_handle_t *handle)
@@ -285,7 +273,7 @@ esp_err_t oled_display_turn_off(oled_display_handle_t *handle)
     if (handle == NULL || !handle->initialized) {
         return ESP_ERR_INVALID_ARG;
     }
-    return oled_send_cmd(handle, 0xAE);
+    return oled_send_cmd(0xAE);
 }
 
 esp_err_t oled_display_set_cursor(oled_display_handle_t *handle, uint8_t x, uint8_t y)
@@ -297,11 +285,11 @@ esp_err_t oled_display_set_cursor(oled_display_handle_t *handle, uint8_t x, uint
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t ret = oled_send_cmd(handle, 0xB0 + y);
+    esp_err_t ret = oled_send_cmd(0xB0 + y);
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x00 | (x & 0x0F));
+    ret = oled_send_cmd(0x00 | (x & 0x0F));
     if (ret != ESP_OK) return ret;
-    ret = oled_send_cmd(handle, 0x10 | ((x >> 4) & 0x0F));
+    ret = oled_send_cmd(0x10 | ((x >> 4) & 0x0F));
     if (ret == ESP_OK) {
         handle->cursor_x = x;
         handle->cursor_y = y;
@@ -332,7 +320,7 @@ esp_err_t oled_display_write_string(oled_display_handle_t *handle, const char *s
             memcpy(char_buffer, s_font_5x7[ch - 0x20], 5);
             char_buffer[5] = 0x00;
 
-            esp_err_t ret = oled_send_data(handle, char_buffer, sizeof(char_buffer));
+            esp_err_t ret = oled_send_data(char_buffer, sizeof(char_buffer));
             if (ret != ESP_OK) return ret;
 
             handle->cursor_x += 6;
@@ -360,11 +348,11 @@ esp_err_t oled_display_fill_pattern(oled_display_handle_t *handle)
     }
 
     for (uint8_t page = 0; page < 8; page++) {
-        esp_err_t ret = oled_send_cmd(handle, 0xB0 + page);
+        esp_err_t ret = oled_send_cmd(0xB0 + page);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(handle, 0x00);
+        ret = oled_send_cmd(0x00);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(handle, 0x10);
+        ret = oled_send_cmd(0x10);
         if (ret != ESP_OK) return ret;
 
         uint8_t col_data[16];
@@ -372,7 +360,7 @@ esp_err_t oled_display_fill_pattern(oled_display_handle_t *handle)
             col_data[i] = (page % 2 == 0) ? 0x55 : 0xAA;
         }
         for (int chunk = 0; chunk < 8; chunk++) {
-            ret = oled_send_data(handle, col_data, 16);
+            ret = oled_send_data(col_data, 16);
             if (ret != ESP_OK) return ret;
         }
     }
@@ -442,13 +430,13 @@ esp_err_t oled_display_flush(oled_display_handle_t *handle)
         return ESP_ERR_INVALID_ARG;
     }
     for (uint8_t page = 0; page < 8; page++) {
-        esp_err_t ret = oled_send_cmd(handle, 0xB0 + page);
+        esp_err_t ret = oled_send_cmd(0xB0 + page);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(handle, 0x00);
+        ret = oled_send_cmd(0x00);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(handle, 0x10);
+        ret = oled_send_cmd(0x10);
         if (ret != ESP_OK) return ret;
-        ret = oled_send_data(handle, handle->frame_buffer + page * OLED_WIDTH, OLED_WIDTH);
+        ret = oled_send_data(handle->frame_buffer + page * OLED_WIDTH, OLED_WIDTH);
         if (ret != ESP_OK) return ret;
     }
     return ESP_OK;
