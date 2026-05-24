@@ -1,6 +1,6 @@
 /**
  * @file oled_display.h
- * @brief SSD1306 OLED display driver using new I2C master driver.
+ * @brief SSD1306 OLED display driver using i2c_service.
  */
 #pragma once
 
@@ -8,21 +8,19 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
-#include "driver/i2c_master.h"
 
 #define OLED_DISPLAY_I2C_ADDRESS 0x3C
 #define OLED_WIDTH 128
 #define OLED_HEIGHT 64
 
 typedef struct {
-    i2c_master_dev_handle_t dev_handle;
     uint8_t cursor_x;
     uint8_t cursor_y;
     bool initialized;
     uint8_t *frame_buffer;
 } oled_display_handle_t;
 
-esp_err_t oled_display_init(i2c_master_bus_handle_t bus, oled_display_handle_t *handle);
+esp_err_t oled_display_init(oled_display_handle_t *handle);
 esp_err_t oled_display_deinit(oled_display_handle_t *handle);
 esp_err_t oled_display_clear(oled_display_handle_t *handle);
 esp_err_t oled_display_turn_on(oled_display_handle_t *handle);
