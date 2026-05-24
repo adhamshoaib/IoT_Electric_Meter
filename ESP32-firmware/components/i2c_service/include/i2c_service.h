@@ -91,3 +91,18 @@ esp_err_t i2c_service_write_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *ou
  * @return Bus handle when initialized, otherwise NULL.
  */
 i2c_master_bus_handle_t i2c_service_get_bus_handle(void);
+
+/**
+ * @brief Remove a cached device handle.
+ *
+ * Automatically called on deinit, but can be called to free a specific
+ * device slot when a device is no longer needed.
+ *
+ * @param dev_addr 7-bit I2C device address.
+ *
+ * @return ESP_OK on success.
+ * @return ESP_ERR_INVALID_STATE if the service is not initialized.
+ * @return ESP_ERR_NOT_FOUND if the device was not cached.
+ * @return Other esp_err_t codes from the ESP-IDF I2C driver.
+ */
+esp_err_t i2c_service_remove_device(uint8_t dev_addr);
