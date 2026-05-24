@@ -16,6 +16,8 @@
 #define I2C_XFER_TIMEOUT_MS 100
 #define I2C_SERVICE_MAX_DEVICES 8
 
+static esp_err_t i2c_service_add_temp_device(uint8_t dev_addr, i2c_master_dev_handle_t *out_dev);
+
 typedef struct
 {
     uint8_t dev_addr;
