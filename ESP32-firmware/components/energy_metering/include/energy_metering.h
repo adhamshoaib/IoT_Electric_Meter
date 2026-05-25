@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/** Interval (ms) at which total_energy_kwh is persisted to NVS. */
+#define ENERGY_METERING_NVS_SAVE_INTERVAL_MS 60000
+
 /** Calibration and physical constants for one meter instance. */
 typedef struct
 {
@@ -50,23 +53,23 @@ typedef struct
 typedef struct
 {
     energy_metering_calibration_t calibration;
-    float load_threshold_a;   /**< Current above this = load connected (0 = disabled) */
-    float load_hysteresis_a;  /**< Hysteresis band to prevent chattering */
+    float load_threshold_a;  /**< Current above this = load connected (0 = disabled) */
+    float load_hysteresis_a; /**< Hysteresis band to prevent chattering */
 } energy_metering_config_t;
 
-#define ENERGY_METERING_CONFIG_DEFAULT() {            \
+#define ENERGY_METERING_CONFIG_DEFAULT() {                \
     .calibration = ENERGY_METERING_CALIBRATION_DEFAULT(), \
-    .load_threshold_a = 0.01f,                         \
-    .load_hysteresis_a = 0.005f,                       \
+    .load_threshold_a = 0.01f,                            \
+    .load_hysteresis_a = 0.005f,                          \
 }
 
 /** Processed measurement ready for application use. */
 typedef struct
 {
-    float voltage_v;         /**< RMS mains voltage, volts */
-    float current_a;         /**< RMS load current, amps */
-    float total_energy_kwh;  /**< Accumulated energy since init or last reset, kWh */
-    bool load_connected;     /**< True when current exceeds load_threshold_a */
+    float voltage_v;        /**< RMS mains voltage, volts */
+    float current_a;        /**< RMS load current, amps */
+    float total_energy_kwh; /**< Accumulated energy since init or last reset, kWh */
+    bool load_connected;    /**< True when current exceeds load_threshold_a */
 } energy_metering_data_t;
 
 /** Dedicated background task configuration. */

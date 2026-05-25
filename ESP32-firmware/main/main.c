@@ -5,6 +5,7 @@
 #include "i2c_service.h"
 #include "wifi_sta.h"
 #include "led_driver.h"
+#include "cloud_sync.h"
 
 #include <stdio.h>
 #include "nvs_flash.h"
@@ -31,6 +32,8 @@
 #define LOAD_CHECK_PERIOD_MS 50U
 
 #define LOAD_LED_GPIO GPIO_NUM_18
+#define WIFI_LED_GPIO GPIO_NUM_19
+#define CLOUD_LED_GPIO GPIO_NUM_23
 
 static const char *TAG = "MAIN";
 
@@ -165,10 +168,38 @@ void app_main(void)
     wifi_wait_connected();
     ESP_LOGI(TAG, "WiFi connected");
 
+    ret = cloud_sync_init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Cloud sync init failed: %s", esp_err_to_name(ret));
+    }
+    else
+    {
+        ret = cloud_sync_start_task();
+        if (ret != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Cloud sync task start failed: %s", esp_err_to_name(ret));
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Cloud sync task started");
+        }
+    }
+
     led_t load_led = {.pin = LOAD_LED_GPIO};
     ESP_ERROR_CHECK(led_init(&load_led));
 
+    led_t wifi_led = {.pin = WIFI_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&wifi_led));
+    led_off(&wifi_led);
+
+    led_t cloud_led = {.pin = CLOUD_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&cloud_led));
+    led_off(&cloud_led);
+
     uint32_t display_tick = 0;
+    uint32_t last_upload_count = 0;
+    TickType_t cloud_blink_until = 0;
 
     while (true)
     {
@@ -181,6 +212,31 @@ void app_main(void)
         {
             if (load_led.mode != LED_MODE_OFF)
                 led_off(&load_led);
+        }
+
+        if (wifi_is_connected())
+        {
+            if (wifi_led.mode != LED_MODE_ON)
+                led_on(&wifi_led);
+        }
+        else
+        {
+            if (wifi_led.mode != LED_MODE_OFF)
+                led_off(&wifi_led);
+        }
+
+        uint32_t cur_count = cloud_sync_get_upload_count();
+        if (cur_count != last_upload_count)
+        {
+            last_upload_count = cur_count;
+            led_on(&cloud_led);
+            cloud_blink_until = xTaskGetTickCount() + pdMS_TO_TICKS(100);
+        }
+
+        if (cloud_blink_until != 0 && xTaskGetTickCount() >= cloud_blink_until)
+        {
+            led_off(&cloud_led);
+            cloud_blink_until = 0;
         }
 
         if (display_tick == 0U)
@@ -199,7 +255,7 @@ void app_main(void)
                 {
                     char line[48];
                     oled_display_clear_buffer(&oled);
-                    snprintf(line, sizeof(line), "%.2f", m.total_energy_kwh);
+                    snprintf(line, sizeof(line), "%.6f", m.total_energy_kwh);
                     int len = strlen(line);
                     int x_start = (len * 12 < 128) ? (128 - len * 12) / 2 : 0;
                     oled_display_write_scaled_string(&oled, x_start, 4, 2, line);

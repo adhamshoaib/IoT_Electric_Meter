@@ -4,7 +4,14 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "esp_log.h"
+#include "nvs_flash.h"
+
 #include <stdatomic.h>
+
+#define NVS_NAMESPACE "energy_mtr"
+#define NVS_KEY_TOTAL "total_kwh"
+#define TAG_NVS "ENERGY_NVS"
 
 typedef struct {
     energy_metering_calibration_t cal;
@@ -23,6 +30,10 @@ typedef struct {
     float load_threshold_high;
     float load_threshold_low;
     atomic_bool load_connected;
+
+    nvs_handle_t nvs_handle;
+    TickType_t nvs_last_save_tick;
+    bool nvs_ok;
 } energy_metering_t;
 
 static energy_metering_t s_ctx;
@@ -102,8 +113,7 @@ static float irms_raw_to_amps(uint32_t i_rms_raw)
 static bool counter_wrapped(int32_t curr, int32_t prev)
 {
     const int32_t delta = curr - prev;
-    return ((prev >= 0) && (curr < 0) && (delta < 0)) ||
-           ((prev < 0) && (curr >= 0) && (delta > 0));
+    return (delta > (1 << 23)) || (delta < -(1 << 23));
 }
 
 static float frame_energy_kwh(const bl0939_raw_data_t *raw)
@@ -136,7 +146,7 @@ static float frame_energy_kwh(const bl0939_raw_data_t *raw)
     s_ctx.prev_cfb_cnt = raw->cfb_cnt;
 
     const int32_t delta_total = delta_cfa + delta_cfb;
-    if (delta_total <= 0)
+    if (delta_total == 0)
     {
         return 0.0f;
     }
@@ -247,6 +257,21 @@ esp_err_t energy_metering_init(const energy_metering_config_t *config)
     s_ctx.task_period_ms = k_default_task_cfg.period_ms;
     s_ctx.initialized = true;
     atomic_store(&s_ctx.load_connected, false);
+
+    s_ctx.nvs_ok = false;
+    esp_err_t nvs_err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &s_ctx.nvs_handle);
+    if (nvs_err == ESP_OK)
+    {
+        s_ctx.nvs_ok = true;
+        float saved_energy = 0.0f;
+        size_t saved_size = sizeof(saved_energy);
+        if (nvs_get_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &saved_energy, &saved_size) == ESP_OK && saved_size == sizeof(saved_energy))
+        {
+            s_ctx.total_energy_kwh = saved_energy;
+            ESP_LOGI(TAG_NVS, "Restored: %.6f kWh", saved_energy);
+        }
+        s_ctx.nvs_last_save_tick = xTaskGetTickCount();
+    }
 
     if (config->load_threshold_a > 0.0f)
     {
@@ -454,6 +479,13 @@ void energy_metering_reset_energy(void)
     }
 
     lock_give();
+
+    if (s_ctx.nvs_ok)
+    {
+        float zero = 0.0f;
+        nvs_set_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &zero, sizeof(zero));
+        nvs_commit(s_ctx.nvs_handle);
+    }
 }
 
 bool energy_metering_is_load_connected(void)
@@ -466,8 +498,6 @@ bool energy_metering_is_load_connected(void)
         bl0939_raw_data_t raw;
         if (bl0939_read_raw(&raw, 200) == ESP_OK)
         {
-            s_ctx.total_energy_kwh += frame_energy_kwh(&raw);
-
             const float current = irms_raw_to_amps(raw.ia_rms);
             if (s_ctx.load_threshold_high > 0.0f)
             {
@@ -505,6 +535,20 @@ esp_err_t energy_metering_deinit(void)
 
     (void)energy_metering_stop_task();
 
+    if (s_ctx.nvs_ok)
+    {
+        float energy = 0.0f;
+        if (lock_take())
+        {
+            energy = s_ctx.total_energy_kwh;
+            lock_give();
+        }
+        nvs_set_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &energy, sizeof(energy));
+        nvs_commit(s_ctx.nvs_handle);
+        nvs_close(s_ctx.nvs_handle);
+        s_ctx.nvs_ok = false;
+    }
+
     if (s_ctx.lock != NULL)
     {
         vSemaphoreDelete(s_ctx.lock);
@@ -539,10 +583,41 @@ static void energy_metering_task_entry(void *arg)
         }
 
         energy_metering_data_t sample;
+        bool should_save_nvs = false;
+        float nvs_energy_val = 0.0f;
+
         if (lock_take())
         {
             (void)energy_metering_read_locked(&sample, BL0939_TIMEOUT_USE_DEFAULT);
+
+            if (s_ctx.nvs_ok)
+            {
+                TickType_t now = xTaskGetTickCount();
+                if ((now - s_ctx.nvs_last_save_tick) >= pdMS_TO_TICKS(ENERGY_METERING_NVS_SAVE_INTERVAL_MS))
+                {
+                    s_ctx.nvs_last_save_tick = now;
+                    should_save_nvs = true;
+                    nvs_energy_val = s_ctx.total_energy_kwh;
+                }
+            }
             lock_give();
+        }
+
+        if (should_save_nvs)
+        {
+            esp_err_t err = nvs_set_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &nvs_energy_val, sizeof(nvs_energy_val));
+            if (err == ESP_OK)
+            {
+                err = nvs_commit(s_ctx.nvs_handle);
+            }
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG_NVS, "Save failed: %s", esp_err_to_name(err));
+            }
+            else
+            {
+                ESP_LOGI(TAG_NVS, "NVS flashed: %.6f kWh", nvs_energy_val);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(period_ms));

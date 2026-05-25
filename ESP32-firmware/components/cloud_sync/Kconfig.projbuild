@@ -1,0 +1,39 @@
+menu "Cloud Sync Configuration"
+
+    config CLOUD_SYNC_UPLOAD_INTERVAL_MS
+        int "Upload interval in milliseconds"
+        default 30000
+        help
+            Interval between cloud uploads when energy has changed.
+
+    config CLOUD_SYNC_RETRY_DELAY_MS
+        int "Retry delay after failed upload in milliseconds"
+        default 5000
+        help
+            Delay before retrying a failed upload.
+
+    config CLOUD_SYNC_TASK_PRIORITY
+        int "Cloud sync task priority"
+        default 4
+        help
+            FreeRTOS task priority for the cloud sync task.
+
+    config CLOUD_SYNC_TASK_STACK_SIZE
+        int "Cloud sync task stack size in bytes"
+        default 8192
+        help
+            Stack size for the cloud sync task.
+
+    config CLOUD_SYNC_NTP_SERVER_1
+        string "Primary NTP server"
+        default "pool.ntp.org"
+        help
+            Primary NTP server for time synchronization.
+
+    config CLOUD_SYNC_NTP_SERVER_2
+        string "Secondary NTP server"
+        default "time.nist.gov"
+        help
+            Secondary NTP server for time synchronization.
+
+endmenu
