@@ -34,6 +34,7 @@
 #define LOAD_LED_GPIO GPIO_NUM_18
 #define WIFI_LED_GPIO GPIO_NUM_19
 #define CLOUD_LED_GPIO GPIO_NUM_23
+#define GSM_LED_GPIO GPIO_NUM_27
 
 static const char *TAG = "MAIN";
 
