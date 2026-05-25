@@ -50,14 +50,23 @@ typedef struct
 typedef struct
 {
     energy_metering_calibration_t calibration;
+    float load_threshold_a;   /**< Current above this = load connected (0 = disabled) */
+    float load_hysteresis_a;  /**< Hysteresis band to prevent chattering */
 } energy_metering_config_t;
+
+#define ENERGY_METERING_CONFIG_DEFAULT() {            \
+    .calibration = ENERGY_METERING_CALIBRATION_DEFAULT(), \
+    .load_threshold_a = 0.01f,                         \
+    .load_hysteresis_a = 0.005f,                       \
+}
 
 /** Processed measurement ready for application use. */
 typedef struct
 {
-    float voltage_v;        /**< RMS mains voltage, volts */
-    float current_a;        /**< RMS load current, amps */
-    float total_energy_kwh; /**< Accumulated energy since init or last reset, kWh */
+    float voltage_v;         /**< RMS mains voltage, volts */
+    float current_a;         /**< RMS load current, amps */
+    float total_energy_kwh;  /**< Accumulated energy since init or last reset, kWh */
+    bool load_connected;     /**< True when current exceeds load_threshold_a */
 } energy_metering_data_t;
 
 /** Dedicated background task configuration. */
@@ -141,6 +150,16 @@ esp_err_t energy_metering_stop_task(void);
  * Thread-safe to call from any task.
  */
 void energy_metering_reset_energy(void);
+
+/**
+ * Query whether a load is currently connected.
+ *
+ * Returns the latest load state computed by the background task or direct reads.
+ * Thread-safe.
+ *
+ * @return true if current exceeds the configured threshold (with hysteresis).
+ */
+bool energy_metering_is_load_connected(void);
 
 /**
  * Deinitialize the driver and release resources.

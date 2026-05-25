@@ -4,6 +4,8 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include <stdatomic.h>
+
 typedef struct {
     energy_metering_calibration_t cal;
     float total_energy_kwh;
@@ -18,6 +20,9 @@ typedef struct {
     TaskHandle_t task_handle;
     uint32_t task_period_ms;
     SemaphoreHandle_t lock;
+    float load_threshold_high;
+    float load_threshold_low;
+    atomic_bool load_connected;
 } energy_metering_t;
 
 static energy_metering_t s_ctx;
@@ -155,6 +160,21 @@ static esp_err_t energy_metering_read_locked(energy_metering_data_t *out, uint32
     data.current_a = irms_raw_to_amps(raw.ia_rms);
     data.total_energy_kwh = s_ctx.total_energy_kwh;
 
+    if (s_ctx.load_threshold_high > 0.0f)
+    {
+        if (data.current_a > s_ctx.load_threshold_high)
+        {
+            s_ctx.latest_data.load_connected = true;
+            atomic_store(&s_ctx.load_connected, true);
+        }
+        else if (data.current_a < s_ctx.load_threshold_low)
+        {
+            s_ctx.latest_data.load_connected = false;
+            atomic_store(&s_ctx.load_connected, false);
+        }
+    }
+    data.load_connected = s_ctx.latest_data.load_connected;
+
     s_ctx.latest_data = data;
     s_ctx.sample_valid = true;
     *out = data;
@@ -226,6 +246,19 @@ esp_err_t energy_metering_init(const energy_metering_config_t *config)
     s_ctx.task_stop_requested = false;
     s_ctx.task_period_ms = k_default_task_cfg.period_ms;
     s_ctx.initialized = true;
+    atomic_store(&s_ctx.load_connected, false);
+
+    if (config->load_threshold_a > 0.0f)
+    {
+        float half_hyst = config->load_hysteresis_a / 2.0f;
+        s_ctx.load_threshold_high = config->load_threshold_a + half_hyst;
+        s_ctx.load_threshold_low  = config->load_threshold_a - half_hyst;
+    }
+    else
+    {
+        s_ctx.load_threshold_high = 0.0f;
+        s_ctx.load_threshold_low  = 0.0f;
+    }
 
     lock_give();
 
@@ -412,6 +445,8 @@ void energy_metering_reset_energy(void)
     s_ctx.prev_cfa_cnt = 0;
     s_ctx.prev_cfb_cnt = 0;
     s_ctx.counter_valid = false;
+    s_ctx.latest_data.load_connected = false;
+    atomic_store(&s_ctx.load_connected, false);
 
     if (s_ctx.sample_valid)
     {
@@ -419,6 +454,46 @@ void energy_metering_reset_energy(void)
     }
 
     lock_give();
+}
+
+bool energy_metering_is_load_connected(void)
+{
+    if (!s_ctx.initialized)
+        return false;
+
+    if (s_ctx.lock != NULL && xSemaphoreTake(s_ctx.lock, 0) == pdTRUE)
+    {
+        bl0939_raw_data_t raw;
+        if (bl0939_read_raw(&raw, 200) == ESP_OK)
+        {
+            s_ctx.total_energy_kwh += frame_energy_kwh(&raw);
+
+            const float current = irms_raw_to_amps(raw.ia_rms);
+            if (s_ctx.load_threshold_high > 0.0f)
+            {
+                if (current > s_ctx.load_threshold_high)
+                {
+                    s_ctx.latest_data.load_connected = true;
+                    atomic_store(&s_ctx.load_connected, true);
+                }
+                else if (current < s_ctx.load_threshold_low)
+                {
+                    s_ctx.latest_data.load_connected = false;
+                    atomic_store(&s_ctx.load_connected, false);
+                }
+            }
+
+            s_ctx.latest_data.voltage_v = vrms_raw_to_mains_v(raw.v_rms);
+            s_ctx.latest_data.current_a = current;
+            s_ctx.latest_data.total_energy_kwh = s_ctx.total_energy_kwh;
+            s_ctx.sample_valid = true;
+        }
+        xSemaphoreGive(s_ctx.lock);
+
+        return atomic_load(&s_ctx.load_connected);
+    }
+
+    return atomic_load(&s_ctx.load_connected);
 }
 
 esp_err_t energy_metering_deinit(void)

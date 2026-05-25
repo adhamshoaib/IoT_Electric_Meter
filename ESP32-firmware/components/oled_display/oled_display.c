@@ -105,10 +105,10 @@ static const uint8_t s_font_5x7[96][5] = {
     {0x08, 0x7E, 0x09, 0x01, 0x02},
     {0x08, 0x14, 0x54, 0x54, 0x3C},
     {0x7F, 0x08, 0x04, 0x04, 0x78},
-    {0x00, 0x44, 0x7D, 0x40, 0x00},
+    {0x7F, 0x08, 0x04, 0x04, 0x78},
     {0x20, 0x40, 0x44, 0x3D, 0x00},
     {0x00, 0x7F, 0x10, 0x28, 0x44},
-    {0x00, 0x41, 0x7F, 0x40, 0x00},
+    {0x7F, 0x08, 0x14, 0x20, 0x40},
     {0x7C, 0x04, 0x18, 0x04, 0x78},
     {0x7C, 0x08, 0x04, 0x04, 0x78},
     {0x38, 0x44, 0x44, 0x44, 0x38},
@@ -136,6 +136,12 @@ esp_err_t oled_display_init(oled_display_handle_t *handle)
     }
 
     memset(handle, 0, sizeof(oled_display_handle_t));
+
+    handle->frame_buffer = calloc(1, OLED_WIDTH * OLED_HEIGHT / 8);
+    if (handle->frame_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate frame buffer");
+        return ESP_ERR_NO_MEM;
+    }
 
     vTaskDelay(pdMS_TO_TICKS(100));
 
@@ -214,12 +220,6 @@ esp_err_t oled_display_init(oled_display_handle_t *handle)
     handle->cursor_y = 0;
     handle->initialized = true;
 
-    handle->frame_buffer = calloc(1, OLED_WIDTH * OLED_HEIGHT / 8);
-    if (handle->frame_buffer == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate frame buffer");
-        return ESP_ERR_NO_MEM;
-    }
-
     ESP_LOGI(TAG, "OLED display initialized");
     return ESP_OK;
 }
@@ -242,18 +242,11 @@ esp_err_t oled_display_clear(oled_display_handle_t *handle)
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t empty_row[OLED_WIDTH] = {0};
-
-    for (uint8_t page = 0; page < 8; page++) {
-        esp_err_t ret = oled_send_cmd(0xB0 + page);
-        if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(0x00);
-        if (ret != ESP_OK) return ret;
-        ret = oled_send_cmd(0x10);
-        if (ret != ESP_OK) return ret;
-        ret = oled_send_data(empty_row, OLED_WIDTH);
-        if (ret != ESP_OK) return ret;
+    if (handle->frame_buffer != NULL) {
+        memset(handle->frame_buffer, 0, OLED_WIDTH * OLED_HEIGHT / 8);
     }
+
+    oled_display_flush(handle);
 
     handle->cursor_x = 0;
     handle->cursor_y = 0;
