@@ -1,4 +1,13 @@
-import React, { useState } from 'react';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+   signOut,
+} from "firebase/auth";
+
+import { auth } from "./services/firebase";
+import React, { useEffect, useState } from 'react';
+import { ref, onValue } from 'firebase/database';
+import { database } from './services/firebase';
 import {
   SafeAreaView,
   View,
@@ -13,10 +22,93 @@ import { fakeUser, fakeDashboardData } from './services/fakedata';
 import StatisticsScreen from './screens/StatisticsScreen';
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isSignUp, setIsSignUp] = useState(false);
   const [activeScreen, setActiveScreen] = useState('dashboard');
-  const [email, setEmail] = useState('omar@example.com');
-  const [password, setPassword] = useState('123456');
+  const [email, setEmail] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [password, setPassword] = useState("");
+const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [liveDashboardData, setLiveDashboardData] = useState({
+  ...fakeDashboardData,
+  monthlyConsumption: 0,
+  todayConsumption: 0,
+  lastSync: 'Waiting for reading',
+});
+useEffect(() => {
+   if (!isLoggedIn) return;
+  const meterRef = ref(database, 'current_reading');
+
+  const unsubscribe = onValue(meterRef, (snapshot) => {
+    const firebaseData = snapshot.val();
+
+    if (firebaseData) {
+      setLiveDashboardData((prev) => ({
+        ...prev,
+        monthlyConsumption: firebaseData.energy_kwh ?? prev.monthlyConsumption,
+        lastSync: firebaseData.ts ? String(firebaseData.ts) : 'Just now',
+      }));
+    }
+  });
+
+  return () => unsubscribe();
+}, [isLoggedIn]);
+const handleAuth = async () => {
+  setAuthError('');
+
+  const cleanEmail = email.trim();
+
+  if (!cleanEmail || !password) {
+    setAuthError('Please enter your email and password.');
+    return;
+  }
+
+  if (isSignUp && password !== confirmPassword) {
+    setAuthError('Passwords do not match.');
+    return;
+  }
+
+  if (isSignUp && password.length < 6) {
+    setAuthError('Password should be at least 6 characters.');
+    return;
+  }
+
+  try {
+    setAuthLoading(true);
+
+    if (isSignUp) {
+      await createUserWithEmailAndPassword(auth, cleanEmail, password);
+    } else {
+      await signInWithEmailAndPassword(auth, cleanEmail, password);
+    }
+
+    setIsLoggedIn(true);
+    setActiveScreen('dashboard');
+  } catch (error) {
+    console.log(error.code);
+
+    if (error.code === 'auth/email-already-in-use') {
+      setAuthError('This email is already registered. Try logging in.');
+    } else if (error.code === 'auth/weak-password') {
+      setAuthError('Password should be at least 6 characters.');
+    } else if (
+      error.code === 'auth/invalid-credential' ||
+      error.code === 'auth/wrong-password' ||
+      error.code === 'auth/user-not-found'
+    ) {
+      setAuthError('Incorrect email or password.');
+    } else if (error.code === 'auth/invalid-email') {
+      setAuthError('Please enter a valid email address.');
+    } else if (error.code === 'auth/operation-not-allowed') {
+      setAuthError('Email/password login is not enabled in Firebase.');
+    } else {
+      setAuthError('Something went wrong. Please try again.');
+    }
+  } finally {
+    setAuthLoading(false);
+  }
+};
 
   if (!isLoggedIn) {
     return (
@@ -34,37 +126,79 @@ export default function App() {
             Track your electricity usage in a simple and clear way
           </Text>
 
-          <View style={styles.loginCard}>
-            <Text style={styles.inputLabel}>Email</Text>
-            <TextInput
-              value={email}
-              onChangeText={setEmail}
-              placeholder="Enter your email"
-              autoCapitalize="none"
-              placeholderTextColor="#94a3b8"
-              style={styles.input}
-            />
+<View style={styles.loginCard}>
+  <Text style={styles.authTitle}>
+    {isSignUp ? 'Create Account' : 'Welcome Back'}
+  </Text>
 
-            <Text style={styles.inputLabel}>Password</Text>
-            <TextInput
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Enter your password"
-              secureTextEntry
-              placeholderTextColor="#94a3b8"
-              style={styles.input}
-            />
+  <Text style={styles.authSubtitle}>
+    {isSignUp
+      ? 'Create an account to access your smart meter dashboard.'
+      : 'Login to continue to your smart meter dashboard.'}
+  </Text>
 
-            <TouchableOpacity
-              style={styles.loginButton}
-              onPress={() => {
-                setIsLoggedIn(true);
-                setActiveScreen('dashboard');
-              }}
-            >
-              <Text style={styles.loginButtonText}>Login</Text>
-            </TouchableOpacity>
-          </View>
+  <Text style={styles.inputLabel}>Email</Text>
+  <TextInput
+    value={email}
+    onChangeText={setEmail}
+    placeholder="Enter your email"
+    autoCapitalize="none"
+    keyboardType="email-address"
+    placeholderTextColor="#94a3b8"
+    style={styles.input}
+  />
+
+  <Text style={styles.inputLabel}>Password</Text>
+  <TextInput
+    value={password}
+    onChangeText={setPassword}
+    placeholder="Enter your password"
+    secureTextEntry
+    placeholderTextColor="#94a3b8"
+    style={styles.input}
+  />
+
+  {isSignUp && (
+    <>
+      <Text style={styles.inputLabel}>Confirm Password</Text>
+      <TextInput
+        value={confirmPassword}
+        onChangeText={setConfirmPassword}
+        placeholder="Re-enter your password"
+        secureTextEntry
+        placeholderTextColor="#94a3b8"
+        style={styles.input}
+      />
+    </>
+  )}
+
+  {authError ? <Text style={styles.authError}>{authError}</Text> : null}
+
+  <TouchableOpacity
+    style={[styles.loginButton, authLoading && styles.disabledButton]}
+    onPress={handleAuth}
+    disabled={authLoading}
+  >
+    <Text style={styles.loginButtonText}>
+      {authLoading ? 'Please wait...' : isSignUp ? 'Sign Up' : 'Login'}
+    </Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    onPress={() => {
+      setIsSignUp(!isSignUp);
+      setAuthError('');
+      setPassword('');
+      setConfirmPassword('');
+    }}
+  >
+    <Text style={styles.signUpText}>
+      {isSignUp
+        ? 'Already have an account? Login'
+        : "Don't have an account? Sign Up"}
+    </Text>
+  </TouchableOpacity>
+</View>
         </View>
       </SafeAreaView>
     );
@@ -75,7 +209,7 @@ export default function App() {
       {activeScreen === 'dashboard' && (
         <DashboardScreen
           user={fakeUser}
-          data={fakeDashboardData}
+          data={liveDashboardData}
           onOpenSettings={() => setActiveScreen('settings')}
         />
       )}
@@ -85,10 +219,11 @@ export default function App() {
           onBack={() => setActiveScreen('dashboard')}
           onOpenProfile={() => setActiveScreen('profile')}
           onOpenBilling={() => setActiveScreen('billing')}
-          onLogout={() => {
-            setIsLoggedIn(false);
-            setActiveScreen('dashboard');
-          }}
+        onLogout={async () => {
+  await signOut(auth);
+  setIsLoggedIn(false);
+  setActiveScreen('dashboard');
+}}
         />
       )}
 
@@ -105,7 +240,7 @@ export default function App() {
 
       {activeScreen === 'billing' && (
         <BillingScreen
-          data={fakeDashboardData}
+          data={liveDashboardData}
           onBack={() => setActiveScreen('settings')}
         />
       )}
@@ -200,8 +335,10 @@ function DashboardScreen({ user, data, onOpenSettings }) {
           <Text style={styles.heroUnit}>kWh</Text>
         </View>
 
-        <Text style={styles.heroNote}>
-          Your total electricity consumption for the current month
+        <Text style={styles.heroNote}>Updated from meter reading</Text>
+
+        <Text style={styles.heroMetaText}>
+          Last sync: {data.lastSync ?? 'Just now'}
         </Text>
       </View>
 
@@ -609,6 +746,42 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 12,
   },
+  authTitle: {
+  fontSize: 22,
+  fontWeight: '800',
+  color: '#0f172a',
+  marginBottom: 6,
+},
+
+authSubtitle: {
+  fontSize: 13,
+  color: '#64748b',
+  lineHeight: 19,
+  marginBottom: 10,
+},
+
+authError: {
+  color: '#dc2626',
+  backgroundColor: '#fef2f2',
+  borderWidth: 1,
+  borderColor: '#fecaca',
+  padding: 12,
+  borderRadius: 14,
+  fontSize: 13,
+  marginTop: 14,
+},
+
+disabledButton: {
+  opacity: 0.65,
+},
+
+signUpText: {
+  textAlign: 'center',
+  marginTop: 18,
+  fontSize: 14,
+  fontWeight: '700',
+  color: '#0f766e',
+},
   input: {
     backgroundColor: '#f8fafc',
     borderWidth: 1,
@@ -1288,4 +1461,11 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: '#0f766e',
   },
+  
+heroMetaText: {
+  color: '#ccfbf1',
+  fontSize: 13,
+  marginTop: 10,
+  fontWeight: '600',
+},
 });
