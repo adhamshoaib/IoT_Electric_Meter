@@ -1,0 +1,634 @@
+#include "energy_metering.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
+
+#include "esp_log.h"
+#include "nvs_flash.h"
+
+#include <stdatomic.h>
+
+#define NVS_NAMESPACE "energy_mtr"
+#define NVS_KEY_TOTAL "total_kwh"
+#define TAG_NVS "ENERGY_NVS"
+
+typedef struct {
+    energy_metering_calibration_t cal;
+    float total_energy_kwh;
+    float energy_divisor;
+    int32_t prev_cfa_cnt;
+    int32_t prev_cfb_cnt;
+    bool counter_valid;
+    bool initialized;
+    bool sample_valid;
+    bool task_stop_requested;
+    energy_metering_data_t latest_data;
+    TaskHandle_t task_handle;
+    uint32_t task_period_ms;
+    SemaphoreHandle_t lock;
+    float load_threshold_high;
+    float load_threshold_low;
+    atomic_bool load_connected;
+
+    nvs_handle_t nvs_handle;
+    TickType_t nvs_last_save_tick;
+    bool nvs_ok;
+} energy_metering_t;
+
+static energy_metering_t s_ctx;
+static const energy_metering_task_config_t k_default_task_cfg = ENERGY_METERING_TASK_CONFIG_DEFAULT();
+
+static bool lock_take(void)
+{
+    if (s_ctx.lock == NULL)
+    {
+        return false;
+    }
+
+    return xSemaphoreTake(s_ctx.lock, portMAX_DELAY) == pdTRUE;
+}
+
+static void lock_give(void)
+{
+    if (s_ctx.lock != NULL)
+    {
+        (void)xSemaphoreGive(s_ctx.lock);
+    }
+}
+
+static void energy_metering_task_entry(void *arg);
+
+static bool calibration_is_valid(const energy_metering_calibration_t *cal)
+{
+    return (cal != NULL) &&
+           (cal->vrms_scale > 0.0f) &&
+           (cal->vref > 0.0f) &&
+           (cal->divider_ratio > 0.0f) &&
+           (cal->vac_fine_gain > 0.0f) &&
+           (cal->irms_scale > 0.0f) &&
+           (cal->ia_pin_fine_gain > 0.0f) &&
+           (cal->ia_cal_a_per_mv > 0.0f) &&
+           (cal->energy_ref > 0.0f) &&
+           (cal->cf_count_scale > 0.0f) &&
+           (cal->vac_noise_floor_v >= 0.0f) &&
+           (cal->ia_noise_floor_a >= 0.0f) &&
+           (cal->vp_noise_floor_mv >= 0.0f);
+}
+
+static uint32_t vrms_raw_apply_zero_offset(uint32_t v_rms_raw)
+{
+    if (v_rms_raw <= s_ctx.cal.vrms_zero_offset)
+    {
+        return 0U;
+    }
+
+    return v_rms_raw - s_ctx.cal.vrms_zero_offset;
+}
+
+static float vrms_raw_to_mains_v(uint32_t v_rms_raw)
+{
+    const uint32_t corrected_raw = vrms_raw_apply_zero_offset(v_rms_raw);
+    const float vp_mv = ((float)corrected_raw * s_ctx.cal.vref) / s_ctx.cal.vrms_scale;
+    const float mains_v = ((vp_mv * s_ctx.cal.divider_ratio) / 1000.0f) * s_ctx.cal.vac_fine_gain;
+
+    return (mains_v < s_ctx.cal.vac_noise_floor_v) ? 0.0f : mains_v;
+}
+
+static float irms_raw_to_ip_mv(uint32_t i_rms_raw)
+{
+    const float ip_mv = (((float)i_rms_raw * s_ctx.cal.vref) / s_ctx.cal.irms_scale) *
+                        s_ctx.cal.ia_pin_fine_gain;
+    return (ip_mv < s_ctx.cal.vp_noise_floor_mv) ? 0.0f : ip_mv;
+}
+
+static float irms_raw_to_amps(uint32_t i_rms_raw)
+{
+    const float ip_mv = irms_raw_to_ip_mv(i_rms_raw);
+    const float amps = ip_mv * s_ctx.cal.ia_cal_a_per_mv;
+
+    return (amps < s_ctx.cal.ia_noise_floor_a) ? 0.0f : amps;
+}
+
+static bool counter_wrapped(int32_t curr, int32_t prev)
+{
+    const int32_t delta = curr - prev;
+    return (delta > (1 << 23)) || (delta < -(1 << 23));
+}
+
+static float frame_energy_kwh(const bl0939_raw_data_t *raw)
+{
+    if (raw == NULL)
+    {
+        return 0.0f;
+    }
+
+    if (!s_ctx.counter_valid)
+    {
+        s_ctx.prev_cfa_cnt = raw->cfa_cnt;
+        s_ctx.prev_cfb_cnt = raw->cfb_cnt;
+        s_ctx.counter_valid = true;
+        return 0.0f;
+    }
+
+    if (counter_wrapped(raw->cfa_cnt, s_ctx.prev_cfa_cnt) ||
+        counter_wrapped(raw->cfb_cnt, s_ctx.prev_cfb_cnt))
+    {
+        s_ctx.prev_cfa_cnt = raw->cfa_cnt;
+        s_ctx.prev_cfb_cnt = raw->cfb_cnt;
+        return 0.0f;
+    }
+
+    const int32_t delta_cfa = raw->cfa_cnt - s_ctx.prev_cfa_cnt;
+    const int32_t delta_cfb = raw->cfb_cnt - s_ctx.prev_cfb_cnt;
+
+    s_ctx.prev_cfa_cnt = raw->cfa_cnt;
+    s_ctx.prev_cfb_cnt = raw->cfb_cnt;
+
+    const int32_t delta_total = delta_cfa + delta_cfb;
+    if (delta_total == 0)
+    {
+        return 0.0f;
+    }
+
+    return (float)delta_total / s_ctx.energy_divisor;
+}
+
+static esp_err_t energy_metering_read_locked(energy_metering_data_t *out, uint32_t timeout_ms)
+{
+    bl0939_raw_data_t raw;
+    esp_err_t ret = bl0939_read_raw(&raw, timeout_ms);
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    s_ctx.total_energy_kwh += frame_energy_kwh(&raw);
+
+    energy_metering_data_t data;
+    data.voltage_v = vrms_raw_to_mains_v(raw.v_rms);
+    data.current_a = irms_raw_to_amps(raw.ia_rms);
+    data.total_energy_kwh = s_ctx.total_energy_kwh;
+
+    if (s_ctx.load_threshold_high > 0.0f)
+    {
+        if (data.current_a > s_ctx.load_threshold_high)
+        {
+            s_ctx.latest_data.load_connected = true;
+            atomic_store(&s_ctx.load_connected, true);
+        }
+        else if (data.current_a < s_ctx.load_threshold_low)
+        {
+            s_ctx.latest_data.load_connected = false;
+            atomic_store(&s_ctx.load_connected, false);
+        }
+    }
+    data.load_connected = s_ctx.latest_data.load_connected;
+
+    s_ctx.latest_data = data;
+    s_ctx.sample_valid = true;
+    *out = data;
+
+    return ESP_OK;
+}
+
+static energy_metering_task_config_t task_config_resolve(const energy_metering_task_config_t *config)
+{
+    energy_metering_task_config_t resolved = *config;
+
+    if (resolved.task_name == NULL)
+    {
+        resolved.task_name = k_default_task_cfg.task_name;
+    }
+
+    if (resolved.stack_size == 0U)
+    {
+        resolved.stack_size = k_default_task_cfg.stack_size;
+    }
+
+    if (resolved.priority == 0U)
+    {
+        resolved.priority = k_default_task_cfg.priority;
+    }
+
+    if (resolved.period_ms == 0U)
+    {
+        resolved.period_ms = k_default_task_cfg.period_ms;
+    }
+
+    return resolved;
+}
+
+esp_err_t energy_metering_init(const energy_metering_config_t *config)
+{
+    if (config == NULL || !calibration_is_valid(&config->calibration))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_ctx.lock == NULL)
+    {
+        s_ctx.lock = xSemaphoreCreateMutex();
+        if (s_ctx.lock == NULL)
+        {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (!lock_take())
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_ctx.task_handle != NULL)
+    {
+        lock_give();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_ctx.cal = config->calibration;
+    s_ctx.energy_divisor = s_ctx.cal.energy_ref * s_ctx.cal.cf_count_scale;
+    s_ctx.total_energy_kwh = 0.0f;
+    s_ctx.prev_cfa_cnt = 0;
+    s_ctx.prev_cfb_cnt = 0;
+    s_ctx.counter_valid = false;
+    s_ctx.sample_valid = false;
+    s_ctx.task_stop_requested = false;
+    s_ctx.task_period_ms = k_default_task_cfg.period_ms;
+    s_ctx.initialized = true;
+    atomic_store(&s_ctx.load_connected, false);
+
+    s_ctx.nvs_ok = false;
+    esp_err_t nvs_err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &s_ctx.nvs_handle);
+    if (nvs_err == ESP_OK)
+    {
+        s_ctx.nvs_ok = true;
+        float saved_energy = 0.0f;
+        size_t saved_size = sizeof(saved_energy);
+        if (nvs_get_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &saved_energy, &saved_size) == ESP_OK && saved_size == sizeof(saved_energy))
+        {
+            s_ctx.total_energy_kwh = saved_energy;
+            ESP_LOGI(TAG_NVS, "Restored: %.6f kWh", saved_energy);
+        }
+        s_ctx.nvs_last_save_tick = xTaskGetTickCount();
+    }
+
+    if (config->load_threshold_a > 0.0f)
+    {
+        float half_hyst = config->load_hysteresis_a / 2.0f;
+        s_ctx.load_threshold_high = config->load_threshold_a + half_hyst;
+        s_ctx.load_threshold_low  = config->load_threshold_a - half_hyst;
+    }
+    else
+    {
+        s_ctx.load_threshold_high = 0.0f;
+        s_ctx.load_threshold_low  = 0.0f;
+    }
+
+    lock_give();
+
+    return ESP_OK;
+}
+
+esp_err_t energy_metering_read(energy_metering_data_t *out, uint32_t timeout_ms)
+{
+    if (!s_ctx.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (out == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!lock_take())
+    {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    if ((s_ctx.task_handle != NULL) &&
+        (xTaskGetCurrentTaskHandle() != s_ctx.task_handle))
+    {
+        lock_give();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t ret = energy_metering_read_locked(out, timeout_ms);
+    lock_give();
+
+    return ret;
+}
+
+esp_err_t energy_metering_get_latest(energy_metering_data_t *out)
+{
+    if (!s_ctx.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (out == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!lock_take())
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!s_ctx.sample_valid)
+    {
+        lock_give();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    *out = s_ctx.latest_data;
+    lock_give();
+
+    return ESP_OK;
+}
+
+esp_err_t energy_metering_start_task(const energy_metering_task_config_t *config)
+{
+    if (config == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_ctx.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const energy_metering_task_config_t task_cfg = task_config_resolve(config);
+    if ((task_cfg.stack_size == 0U) ||
+        (task_cfg.period_ms == 0U) ||
+        (task_cfg.priority == 0U) ||
+        (task_cfg.priority >= (uint32_t)configMAX_PRIORITIES))
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!lock_take())
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_ctx.task_handle != NULL)
+    {
+        lock_give();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_ctx.task_period_ms = task_cfg.period_ms;
+    s_ctx.task_stop_requested = false;
+
+    const BaseType_t task_created = xTaskCreate(energy_metering_task_entry,
+                                                 task_cfg.task_name,
+                                                 task_cfg.stack_size,
+                                                 NULL,
+                                                 (UBaseType_t)task_cfg.priority,
+                                                 &s_ctx.task_handle);
+    if (task_created != pdPASS)
+    {
+        s_ctx.task_handle = NULL;
+        lock_give();
+        return ESP_ERR_NO_MEM;
+    }
+
+    lock_give();
+    return ESP_OK;
+}
+
+esp_err_t energy_metering_stop_task(void)
+{
+    if (!s_ctx.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!lock_take())
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const TaskHandle_t task_handle = s_ctx.task_handle;
+    if (task_handle == NULL)
+    {
+        lock_give();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_ctx.task_stop_requested = true;
+    lock_give();
+
+    if (xTaskGetCurrentTaskHandle() == task_handle)
+    {
+        return ESP_OK;
+    }
+
+    const uint32_t timeout_ticks = pdMS_TO_TICKS(5000U);
+    const TickType_t start_ticks = xTaskGetTickCount();
+
+    while (true)
+    {
+        if (lock_take())
+        {
+            const bool task_stopped = (s_ctx.task_handle == NULL);
+            lock_give();
+            if (task_stopped)
+            {
+                break;
+            }
+        }
+
+        if ((xTaskGetTickCount() - start_ticks) >= timeout_ticks)
+        {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10U));
+    }
+
+    return ESP_OK;
+}
+
+void energy_metering_reset_energy(void)
+{
+    if (!s_ctx.initialized)
+    {
+        return;
+    }
+
+    if (!lock_take())
+    {
+        return;
+    }
+
+    s_ctx.total_energy_kwh = 0.0f;
+    s_ctx.prev_cfa_cnt = 0;
+    s_ctx.prev_cfb_cnt = 0;
+    s_ctx.counter_valid = false;
+    s_ctx.latest_data.load_connected = false;
+    atomic_store(&s_ctx.load_connected, false);
+
+    if (s_ctx.sample_valid)
+    {
+        s_ctx.latest_data.total_energy_kwh = 0.0f;
+    }
+
+    lock_give();
+
+    if (s_ctx.nvs_ok)
+    {
+        float zero = 0.0f;
+        nvs_set_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &zero, sizeof(zero));
+        nvs_commit(s_ctx.nvs_handle);
+    }
+}
+
+bool energy_metering_is_load_connected(void)
+{
+    if (!s_ctx.initialized)
+        return false;
+
+    if (s_ctx.lock != NULL && xSemaphoreTake(s_ctx.lock, 0) == pdTRUE)
+    {
+        bl0939_raw_data_t raw;
+        if (bl0939_read_raw(&raw, 200) == ESP_OK)
+        {
+            const float current = irms_raw_to_amps(raw.ia_rms);
+            if (s_ctx.load_threshold_high > 0.0f)
+            {
+                if (current > s_ctx.load_threshold_high)
+                {
+                    s_ctx.latest_data.load_connected = true;
+                    atomic_store(&s_ctx.load_connected, true);
+                }
+                else if (current < s_ctx.load_threshold_low)
+                {
+                    s_ctx.latest_data.load_connected = false;
+                    atomic_store(&s_ctx.load_connected, false);
+                }
+            }
+
+            s_ctx.latest_data.voltage_v = vrms_raw_to_mains_v(raw.v_rms);
+            s_ctx.latest_data.current_a = current;
+            s_ctx.latest_data.total_energy_kwh = s_ctx.total_energy_kwh;
+            s_ctx.sample_valid = true;
+        }
+        xSemaphoreGive(s_ctx.lock);
+
+        return atomic_load(&s_ctx.load_connected);
+    }
+
+    return atomic_load(&s_ctx.load_connected);
+}
+
+esp_err_t energy_metering_deinit(void)
+{
+    if (!s_ctx.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    (void)energy_metering_stop_task();
+
+    if (s_ctx.nvs_ok)
+    {
+        float energy = 0.0f;
+        if (lock_take())
+        {
+            energy = s_ctx.total_energy_kwh;
+            lock_give();
+        }
+        nvs_set_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &energy, sizeof(energy));
+        nvs_commit(s_ctx.nvs_handle);
+        nvs_close(s_ctx.nvs_handle);
+        s_ctx.nvs_ok = false;
+    }
+
+    if (s_ctx.lock != NULL)
+    {
+        vSemaphoreDelete(s_ctx.lock);
+        s_ctx.lock = NULL;
+    }
+
+    s_ctx.initialized = false;
+    s_ctx.task_handle = NULL;
+
+    return ESP_OK;
+}
+
+static void energy_metering_task_entry(void *arg)
+{
+    (void)arg;
+
+    while (true)
+    {
+        if (!lock_take())
+        {
+            vTaskDelete(NULL);
+            return;
+        }
+
+        const bool stop_requested = s_ctx.task_stop_requested;
+        const uint32_t period_ms = s_ctx.task_period_ms;
+        lock_give();
+
+        if (stop_requested)
+        {
+            break;
+        }
+
+        energy_metering_data_t sample;
+        bool should_save_nvs = false;
+        float nvs_energy_val = 0.0f;
+
+        if (lock_take())
+        {
+            (void)energy_metering_read_locked(&sample, BL0939_TIMEOUT_USE_DEFAULT);
+
+            if (s_ctx.nvs_ok)
+            {
+                TickType_t now = xTaskGetTickCount();
+                if ((now - s_ctx.nvs_last_save_tick) >= pdMS_TO_TICKS(ENERGY_METERING_NVS_SAVE_INTERVAL_MS))
+                {
+                    s_ctx.nvs_last_save_tick = now;
+                    should_save_nvs = true;
+                    nvs_energy_val = s_ctx.total_energy_kwh;
+                }
+            }
+            lock_give();
+        }
+
+        if (should_save_nvs)
+        {
+            esp_err_t err = nvs_set_blob(s_ctx.nvs_handle, NVS_KEY_TOTAL, &nvs_energy_val, sizeof(nvs_energy_val));
+            if (err == ESP_OK)
+            {
+                err = nvs_commit(s_ctx.nvs_handle);
+            }
+            if (err != ESP_OK)
+            {
+                ESP_LOGE(TAG_NVS, "Save failed: %s", esp_err_to_name(err));
+            }
+            else
+            {
+                ESP_LOGI(TAG_NVS, "NVS flashed: %.6f kWh", nvs_energy_val);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(period_ms));
+    }
+
+    if (lock_take())
+    {
+        s_ctx.task_handle = NULL;
+        s_ctx.task_stop_requested = false;
+        lock_give();
+    }
+
+    vTaskDelete(NULL);
+}

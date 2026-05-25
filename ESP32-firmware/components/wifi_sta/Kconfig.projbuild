@@ -1,0 +1,11 @@
+menu "WiFi Station Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "adham"
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "adham@9876"
+
+endmenu
