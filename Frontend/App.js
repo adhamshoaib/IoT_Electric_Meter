@@ -2,11 +2,12 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
    signOut,
+    deleteUser,
 } from "firebase/auth";
 
 import { auth } from "./services/firebase";
 import React, { useEffect, useState } from 'react';
-import { ref, onValue } from 'firebase/database';
+import { ref, onValue, set as firebaseSet, get,   runTransaction, } from 'firebase/database';
 import { database } from './services/firebase';
 import {
   SafeAreaView,
@@ -16,12 +17,17 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
+  KeyboardAvoidingView,
+Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { fakeUser, fakeDashboardData } from './services/fakedata';
+import { fakeDashboardData } from './services/fakedata';
 import StatisticsScreen from './screens/StatisticsScreen';
 
 export default function App() {
+  const [fullName, setFullName] = useState('');
+const [meterId, setMeterId] = useState('');
+const [appUser, setAppUser] = useState(null);
   const [isSignUp, setIsSignUp] = useState(false);
   const [activeScreen, setActiveScreen] = useState('dashboard');
   const [email, setEmail] = useState('');
@@ -54,13 +60,44 @@ useEffect(() => {
 
   return () => unsubscribe();
 }, [isLoggedIn]);
+const loadUserProfile = async (firebaseUser) => {
+  const userRef = ref(database, `users/${firebaseUser.uid}`);
+  const snapshot = await get(userRef);
+
+  if (snapshot.exists()) {
+    setAppUser(snapshot.val());
+  } else {
+    const fallbackUser = {
+      uid: firebaseUser.uid,
+      name: firebaseUser.email?.split('@')[0] ?? 'User',
+      email: firebaseUser.email,
+      meterId: 'Not assigned',
+      accountNumber: firebaseUser.uid.slice(0, 8).toUpperCase(),
+      address: 'Not added yet',
+    };
+
+    setAppUser(fallbackUser);
+  }
+};
 const handleAuth = async () => {
   setAuthError('');
 
   const cleanEmail = email.trim();
+  const cleanMeterNumber = meterId.trim();
+const fullMeterId = `MTR${cleanMeterNumber.padStart(3, '0')}`;
 
   if (!cleanEmail || !password) {
     setAuthError('Please enter your email and password.');
+    return;
+  }
+
+  if (isSignUp && !fullName.trim()) {
+    setAuthError('Please enter your full name.');
+    return;
+  }
+
+  if (isSignUp && !meterId.trim()) {
+    setAuthError('Please enter your meter ID.');
     return;
   }
 
@@ -78,9 +115,52 @@ const handleAuth = async () => {
     setAuthLoading(true);
 
     if (isSignUp) {
-      await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
+      );
+
+      const firebaseUser = userCredential.user;
+       const meterClaimRef = ref(database, `meterOwners/${fullMeterId}`);
+         const claimResult = await runTransaction(meterClaimRef, (currentOwner) => {
+    if (currentOwner === null) {
+      return firebaseUser.uid;
+    }
+
+    return;
+  });
+
+  if (!claimResult.committed) {
+    await deleteUser(firebaseUser).catch(() => {});
+
+    setAuthError(
+      'This meter number is already linked to another account.'
+    );
+
+    return;
+  }
+
+      const newProfile = {
+        uid: firebaseUser.uid,
+        name: fullName.trim(),
+        email: cleanEmail,
+        meterId: fullMeterId,
+        accountNumber: firebaseUser.uid.slice(0, 8).toUpperCase(),
+        address: 'Not added yet',
+      };
+
+      await firebaseSet(ref(database, `users/${firebaseUser.uid}`), newProfile);
+
+      setAppUser(newProfile);
     } else {
-      await signInWithEmailAndPassword(auth, cleanEmail, password);
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        cleanEmail,
+        password
+      );
+
+      await loadUserProfile(userCredential.user);
     }
 
     setIsLoggedIn(true);
@@ -100,8 +180,6 @@ const handleAuth = async () => {
       setAuthError('Incorrect email or password.');
     } else if (error.code === 'auth/invalid-email') {
       setAuthError('Please enter a valid email address.');
-    } else if (error.code === 'auth/operation-not-allowed') {
-      setAuthError('Email/password login is not enabled in Firebase.');
     } else {
       setAuthError('Something went wrong. Please try again.');
     }
@@ -110,108 +188,161 @@ const handleAuth = async () => {
   }
 };
 
-  if (!isLoggedIn) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loginScreen}>
-          <View style={styles.loginGlowTop} />
-          <View style={styles.loginGlowBottom} />
+if (!isLoggedIn) {
+  return (
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.loginKeyboardView}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.loginScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.loginScreen}>
+            <View style={styles.loginGlowTop} />
+            <View style={styles.loginGlowBottom} />
 
-          <View style={styles.logoCircle}>
-            <Text style={styles.logoIcon}>⚡</Text>
+            <View style={styles.logoCircle}>
+              <Text style={styles.logoIcon}>⚡</Text>
+            </View>
+
+            <Text style={styles.appTitle}>Smart Meter</Text>
+            <Text style={styles.appSubtitle}>
+              Track your electricity usage in a simple and clear way
+            </Text>
+
+            <View style={styles.loginCard}>
+              <Text style={styles.authTitle}>
+                {isSignUp ? 'Create Account' : 'Welcome Back'}
+              </Text>
+
+              <Text style={styles.authSubtitle}>
+                {isSignUp
+                  ? 'Create an account to access your smart meter dashboard.'
+                  : 'Login to continue to your smart meter dashboard.'}
+              </Text>
+
+              {isSignUp && (
+                <>
+                  <Text style={styles.inputLabel}>Full Name</Text>
+                  <TextInput
+                    value={fullName}
+                    onChangeText={setFullName}
+                    placeholder="Enter your full name"
+                    placeholderTextColor="#94a3b8"
+                    style={styles.input}
+                  />
+
+                  <Text style={styles.inputLabel}>Meter Number</Text>
+
+                  <View style={styles.meterInputRow}>
+                    <View style={styles.meterPrefixBox}>
+                      <Text style={styles.meterPrefixText}>MTR</Text>
+                    </View>
+
+                    <TextInput
+                      value={meterId}
+                      onChangeText={(text) => {
+                        const numbersOnly = text.replace(/[^0-9]/g, '');
+                        setMeterId(numbersOnly);
+                      }}
+                      placeholder="001"
+                      keyboardType="number-pad"
+                      maxLength={3}
+                      placeholderTextColor="#94a3b8"
+                      style={styles.meterNumberInput}
+                    />
+                  </View>
+
+                  {meterId ? (
+                    <Text style={styles.meterPreviewText}>
+                      Full Meter ID: MTR{meterId.padStart(3, '0')}
+                    </Text>
+                  ) : null}
+                </>
+              )}
+
+              <Text style={styles.inputLabel}>Email</Text>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="Enter your email"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                placeholderTextColor="#94a3b8"
+                style={styles.input}
+              />
+
+              <Text style={styles.inputLabel}>Password</Text>
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Enter your password"
+                secureTextEntry
+                placeholderTextColor="#94a3b8"
+                style={styles.input}
+              />
+
+              {isSignUp && (
+                <>
+                  <Text style={styles.inputLabel}>Confirm Password</Text>
+                  <TextInput
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    placeholder="Re-enter your password"
+                    secureTextEntry
+                    placeholderTextColor="#94a3b8"
+                    style={styles.input}
+                  />
+                </>
+              )}
+
+              {authError ? (
+                <Text style={styles.authError}>{authError}</Text>
+              ) : null}
+
+              <TouchableOpacity
+                style={[styles.loginButton, authLoading && styles.disabledButton]}
+                onPress={handleAuth}
+                disabled={authLoading}
+              >
+                <Text style={styles.loginButtonText}>
+                  {authLoading ? 'Please wait...' : isSignUp ? 'Sign Up' : 'Login'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setIsSignUp(!isSignUp);
+                  setAuthError('');
+                  setPassword('');
+                  setConfirmPassword('');
+                }}
+              >
+                <Text style={styles.signUpText}>
+                  {isSignUp
+                    ? 'Already have an account? Login'
+                    : "Don't have an account? Sign Up"}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
-
-          <Text style={styles.appTitle}>Smart Meter</Text>
-          <Text style={styles.appSubtitle}>
-            Track your electricity usage in a simple and clear way
-          </Text>
-
-<View style={styles.loginCard}>
-  <Text style={styles.authTitle}>
-    {isSignUp ? 'Create Account' : 'Welcome Back'}
-  </Text>
-
-  <Text style={styles.authSubtitle}>
-    {isSignUp
-      ? 'Create an account to access your smart meter dashboard.'
-      : 'Login to continue to your smart meter dashboard.'}
-  </Text>
-
-  <Text style={styles.inputLabel}>Email</Text>
-  <TextInput
-    value={email}
-    onChangeText={setEmail}
-    placeholder="Enter your email"
-    autoCapitalize="none"
-    keyboardType="email-address"
-    placeholderTextColor="#94a3b8"
-    style={styles.input}
-  />
-
-  <Text style={styles.inputLabel}>Password</Text>
-  <TextInput
-    value={password}
-    onChangeText={setPassword}
-    placeholder="Enter your password"
-    secureTextEntry
-    placeholderTextColor="#94a3b8"
-    style={styles.input}
-  />
-
-  {isSignUp && (
-    <>
-      <Text style={styles.inputLabel}>Confirm Password</Text>
-      <TextInput
-        value={confirmPassword}
-        onChangeText={setConfirmPassword}
-        placeholder="Re-enter your password"
-        secureTextEntry
-        placeholderTextColor="#94a3b8"
-        style={styles.input}
-      />
-    </>
-  )}
-
-  {authError ? <Text style={styles.authError}>{authError}</Text> : null}
-
-  <TouchableOpacity
-    style={[styles.loginButton, authLoading && styles.disabledButton]}
-    onPress={handleAuth}
-    disabled={authLoading}
-  >
-    <Text style={styles.loginButtonText}>
-      {authLoading ? 'Please wait...' : isSignUp ? 'Sign Up' : 'Login'}
-    </Text>
-  </TouchableOpacity>
-
-  <TouchableOpacity
-    onPress={() => {
-      setIsSignUp(!isSignUp);
-      setAuthError('');
-      setPassword('');
-      setConfirmPassword('');
-    }}
-  >
-    <Text style={styles.signUpText}>
-      {isSignUp
-        ? 'Already have an account? Login'
-        : "Don't have an account? Sign Up"}
-    </Text>
-  </TouchableOpacity>
-</View>
-        </View>
-      </SafeAreaView>
-    );
-  }
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
 
   return (
     <SafeAreaView style={styles.container}>
       {activeScreen === 'dashboard' && (
         <DashboardScreen
-          user={fakeUser}
-          data={liveDashboardData}
-          onOpenSettings={() => setActiveScreen('settings')}
-        />
+  user={appUser}
+  data={liveDashboardData}
+  onOpenSettings={() => setActiveScreen('settings')}
+/>
       )}
 
       {activeScreen === 'settings' && (
@@ -221,6 +352,7 @@ const handleAuth = async () => {
           onOpenBilling={() => setActiveScreen('billing')}
         onLogout={async () => {
   await signOut(auth);
+    setAppUser(null);
   setIsLoggedIn(false);
   setActiveScreen('dashboard');
 }}
@@ -228,10 +360,10 @@ const handleAuth = async () => {
       )}
 
       {activeScreen === 'profile' && (
-        <ProfileScreen
-          user={fakeUser}
-          onBack={() => setActiveScreen('settings')}
-        />
+       <ProfileScreen
+  user={appUser}
+  onBack={() => setActiveScreen('settings')}
+/>
       )}
 
       {activeScreen === 'statistics' && (
@@ -1466,6 +1598,49 @@ heroMetaText: {
   color: '#ccfbf1',
   fontSize: 13,
   marginTop: 10,
+  fontWeight: '600',
+},
+meterInputRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+
+meterPrefixBox: {
+  height: 50,
+  paddingHorizontal: 16,
+  borderTopLeftRadius: 16,
+  borderBottomLeftRadius: 16,
+  backgroundColor: '#ecfdf5',
+  borderWidth: 1,
+  borderColor: '#ccfbf1',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+meterPrefixText: {
+  color: '#0f766e',
+  fontSize: 15,
+  fontWeight: '800',
+},
+
+meterNumberInput: {
+  flex: 1,
+  height: 50,
+  backgroundColor: '#f8fafc',
+  borderWidth: 1,
+  borderLeftWidth: 0,
+  borderColor: '#e2e8f0',
+  borderTopRightRadius: 16,
+  borderBottomRightRadius: 16,
+  paddingHorizontal: 16,
+  fontSize: 15,
+  color: '#0f172a',
+},
+
+meterPreviewText: {
+  marginTop: 8,
+  fontSize: 12,
+  color: '#64748b',
   fontWeight: '600',
 },
 });
