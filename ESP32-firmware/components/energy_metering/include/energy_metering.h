@@ -34,7 +34,7 @@ typedef struct
 
 /** Convenience initializer - matches the constants in the original main.c. */
 #define ENERGY_METERING_CALIBRATION_DEFAULT() { \
-    .vrms_scale = 79931.0f,                     \
+    .vrms_scale = 80500.0f,                     \
     .vref = 1.218f,                             \
     .divider_ratio = (230.0f / 0.062f),         \
     .vac_fine_gain = 0.956f,                    \
@@ -45,7 +45,7 @@ typedef struct
     .ia_cal_a_per_mv = (0.4347f / 12.0f),       \
     .ia_noise_floor_a = 0.003f,                 \
     .vp_noise_floor_mv = 0.2f,                  \
-    .energy_ref = 3304.0f,                      \
+    .energy_ref = 13.5f,                        \
     .cf_count_scale = 20000.0f,                 \
 }
 

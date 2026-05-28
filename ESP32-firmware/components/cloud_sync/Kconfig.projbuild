@@ -14,7 +14,7 @@ menu "Cloud Sync Configuration"
 
     config CLOUD_SYNC_TASK_PRIORITY
         int "Cloud sync task priority"
-        default 4
+        default 1
         help
             FreeRTOS task priority for the cloud sync task.
 

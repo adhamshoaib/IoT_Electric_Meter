@@ -332,9 +332,15 @@ esp_err_t energy_metering_get_latest(energy_metering_data_t *out)
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (!lock_take())
+    if (xSemaphoreTake(s_ctx.lock, pdMS_TO_TICKS(100)) != pdTRUE)
     {
-        return ESP_ERR_INVALID_STATE;
+        if (!s_ctx.sample_valid)
+        {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        *out = s_ctx.latest_data;
+        return ESP_OK;
     }
 
     if (!s_ctx.sample_valid)
@@ -492,36 +498,6 @@ bool energy_metering_is_load_connected(void)
 {
     if (!s_ctx.initialized)
         return false;
-
-    if (s_ctx.lock != NULL && xSemaphoreTake(s_ctx.lock, 0) == pdTRUE)
-    {
-        bl0939_raw_data_t raw;
-        if (bl0939_read_raw(&raw, 200) == ESP_OK)
-        {
-            const float current = irms_raw_to_amps(raw.ia_rms);
-            if (s_ctx.load_threshold_high > 0.0f)
-            {
-                if (current > s_ctx.load_threshold_high)
-                {
-                    s_ctx.latest_data.load_connected = true;
-                    atomic_store(&s_ctx.load_connected, true);
-                }
-                else if (current < s_ctx.load_threshold_low)
-                {
-                    s_ctx.latest_data.load_connected = false;
-                    atomic_store(&s_ctx.load_connected, false);
-                }
-            }
-
-            s_ctx.latest_data.voltage_v = vrms_raw_to_mains_v(raw.v_rms);
-            s_ctx.latest_data.current_a = current;
-            s_ctx.latest_data.total_energy_kwh = s_ctx.total_energy_kwh;
-            s_ctx.sample_valid = true;
-        }
-        xSemaphoreGive(s_ctx.lock);
-
-        return atomic_load(&s_ctx.load_connected);
-    }
 
     return atomic_load(&s_ctx.load_connected);
 }

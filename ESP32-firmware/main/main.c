@@ -27,7 +27,7 @@
 #define BL0939_UART_BAUD_RATE 4800
 #define BL0939_DEVICE_ADDRESS 0U
 
-#define BL0939_DEFAULT_TIMEOUT_MS 1500U
+#define BL0939_DEFAULT_TIMEOUT_MS 500U
 #define BL0939_READ_PERIOD_MS 1000U
 #define LOAD_CHECK_PERIOD_MS 50U
 
@@ -71,7 +71,7 @@ static esp_err_t init_meter(uart_service_handle_t *out_uart)
         .uart = *out_uart,
         .device_address = BL0939_DEVICE_ADDRESS,
         .calibration = {
-            .voltage_ref = 1.0f,
+            .voltage_ref = 1.007f,
             .current_ref = 1.0f,
             .energy_ref = 1.0f,
         },
@@ -201,6 +201,9 @@ void app_main(void)
     uint32_t display_tick = 0;
     uint32_t last_upload_count = 0;
     TickType_t cloud_blink_until = 0;
+    bool has_baseline = false;
+    float baseline_energy = 0.0f;
+    TickType_t baseline_tick = 0;
 
     while (true)
     {
@@ -246,17 +249,26 @@ void app_main(void)
             ret = energy_metering_get_latest(&m);
             if (ret == ESP_OK)
             {
+                if (!has_baseline)
+                {
+                    has_baseline = true;
+                    baseline_energy = m.total_energy_kwh;
+                    baseline_tick = xTaskGetTickCount();
+                }
+                float energy_kwh = m.total_energy_kwh - baseline_energy;
+                uint32_t elapsed_s = (xTaskGetTickCount() - baseline_tick) * portTICK_PERIOD_MS / 1000;
                 ESP_LOGI(TAG,
-                         "Voltage: %.2f V | Current: %.3f A | Energy: %.6f kWh",
+                         "Voltage: %.2f V | Current: %.3f A | Energy: %.6f kWh | Elapsed: %u s",
                          m.voltage_v,
                          m.current_a,
-                         m.total_energy_kwh);
+                         energy_kwh,
+                         (unsigned)elapsed_s);
 
                 if (oled_ok)
                 {
                     char line[48];
                     oled_display_clear_buffer(&oled);
-                    snprintf(line, sizeof(line), "%.6f", m.total_energy_kwh);
+                    snprintf(line, sizeof(line), "%.6f", energy_kwh);
                     int len = strlen(line);
                     int x_start = (len * 12 < 128) ? (128 - len * 12) / 2 : 0;
                     oled_display_write_scaled_string(&oled, x_start, 4, 2, line);
@@ -270,7 +282,7 @@ void app_main(void)
             }
         }
 
-        display_tick = (display_tick + 1U) % 20U;
+        display_tick = (display_tick + 1U) % 100U;
         vTaskDelay(pdMS_TO_TICKS(LOAD_CHECK_PERIOD_MS));
     }
 }
