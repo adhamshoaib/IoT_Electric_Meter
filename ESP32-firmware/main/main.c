@@ -6,6 +6,7 @@
 #include "wifi_sta.h"
 #include "led_driver.h"
 #include "cloud_sync.h"
+#include "gsm_driver.h"
 
 #include <stdio.h>
 #include "nvs_flash.h"
@@ -34,6 +35,7 @@
 #define LOAD_LED_GPIO GPIO_NUM_18
 #define WIFI_LED_GPIO GPIO_NUM_19
 #define CLOUD_LED_GPIO GPIO_NUM_23
+#define GSM_LED_GPIO GPIO_NUM_27
 
 static const char *TAG = "MAIN";
 
@@ -140,6 +142,34 @@ void app_main(void)
 
     ESP_LOGI(TAG, "BL0939 meter started (UART%d TX=%d RX=%d ADDR=%u)",
              BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
+
+    gsm_err_t gsm_ret = gsm_init();
+    if (gsm_ret == GSM_OK)
+    {
+        ESP_LOGI(TAG, "SIM800 initialised, registering to network...");
+        gsm_ret = gsm_wait_for_registration(60000);
+        if (gsm_ret == GSM_OK)
+        {
+            float energy = energy_metering_get_total_energy_kwh();
+            char sms_buf[GSM_SMS_TEXT_MAX];
+            snprintf(sms_buf, sizeof(sms_buf),
+                     "Meter boot: %.6f kWh", energy);
+            gsm_ret = gsm_sms_send(CONFIG_GSM_PHONE_NUMBER, sms_buf);
+            if (gsm_ret == GSM_OK)
+                ESP_LOGI(TAG, "Boot SMS sent: %.6f kWh", energy);
+            else
+                ESP_LOGW(TAG, "Boot SMS failed: %s", gsm_err_to_str(gsm_ret));
+        }
+        else
+        {
+            ESP_LOGW(TAG, "GSM registration failed: %s", gsm_err_to_str(gsm_ret));
+        }
+    }
+    else
+    {
+        ESP_LOGW(TAG, "GSM init failed: %s", gsm_err_to_str(gsm_ret));
+    }
+
     ret = i2c_service_init(OLED_I2C_PORT, OLED_I2C_SDA, OLED_I2C_SCL, OLED_I2C_CLK_HZ);
     if (ret != ESP_OK)
     {

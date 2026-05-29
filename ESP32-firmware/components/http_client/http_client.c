@@ -10,7 +10,7 @@ static const char *TAG = "SMART_METER";
 esp_err_t firebase_post(time_t ts, float energy_kwh)
 {
     const char *url =
-        "https://sem-rtdb-backend.onrender.com/reading";
+        "http://sem-rtdb-backend.onrender.com/reading";
 
     char payload[128];
     snprintf(payload, sizeof(payload),

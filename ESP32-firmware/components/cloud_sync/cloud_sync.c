@@ -27,8 +27,6 @@ static atomic_uint s_upload_count = 0;
 static uint32_t s_upload_interval_ms = CLOUD_SYNC_DEFAULT_INTERVAL_MS;
 static uint32_t s_retry_delay_ms = CLOUD_SYNC_DEFAULT_RETRY_MS;
 
-
-
 static void time_sync_notification_cb(struct timeval *tv)
 {
     ESP_LOGI(TAG, "SNTP time synchronized");
