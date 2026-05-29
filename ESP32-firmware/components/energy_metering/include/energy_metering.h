@@ -165,6 +165,16 @@ void energy_metering_reset_energy(void);
 bool energy_metering_is_load_connected(void);
 
 /**
+ * Return the current accumulated energy (kWh) directly from the internal
+ * counter.  Unlike energy_metering_get_latest(), this does not require a
+ * valid sample from the background task — it returns the value that was
+ * restored from NVS immediately after energy_metering_init().
+ *
+ * @return Total energy in kWh (0.0f if not initialised).
+ */
+float energy_metering_get_total_energy_kwh(void);
+
+/**
  * Deinitialize the driver and release resources.
  *
  * Stops the background task if running, then releases the mutex.
