@@ -20,9 +20,9 @@ menu "Cloud Sync Configuration"
 
     config CLOUD_SYNC_TASK_STACK_SIZE
         int "Cloud sync task stack size in bytes"
-        default 8192
+        default 16384
         help
-            Stack size for the cloud sync task.
+            Stack size for the cloud sync task (increased for TCP socket buffers).
 
     config CLOUD_SYNC_NTP_SERVER_1
         string "Primary NTP server"

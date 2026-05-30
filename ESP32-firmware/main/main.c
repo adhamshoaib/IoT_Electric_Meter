@@ -180,8 +180,14 @@ void app_main(void)
         }
     }
 
-    wifi_wait_connected();
-    ESP_LOGI(TAG, "WiFi connected");
+    if (wifi_is_connected())
+    {
+        ESP_LOGI(TAG, "WiFi already connected");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "WiFi not connected — cloud sync will use GSM fallback");
+    }
 
     ret = cloud_sync_init();
     if (ret != ESP_OK)
