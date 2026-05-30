@@ -146,24 +146,10 @@ void app_main(void)
     gsm_err_t gsm_ret = gsm_init();
     if (gsm_ret == GSM_OK)
     {
-        ESP_LOGI(TAG, "SIM800 initialised, registering to network...");
+        ESP_LOGI(TAG, "SIM800 initialised");
         gsm_ret = gsm_wait_for_registration(60000);
-        if (gsm_ret == GSM_OK)
-        {
-            float energy = energy_metering_get_total_energy_kwh();
-            char sms_buf[GSM_SMS_TEXT_MAX];
-            snprintf(sms_buf, sizeof(sms_buf),
-                     "Meter boot: %.6f kWh", energy);
-            gsm_ret = gsm_sms_send(CONFIG_GSM_PHONE_NUMBER, sms_buf);
-            if (gsm_ret == GSM_OK)
-                ESP_LOGI(TAG, "Boot SMS sent: %.6f kWh", energy);
-            else
-                ESP_LOGW(TAG, "Boot SMS failed: %s", gsm_err_to_str(gsm_ret));
-        }
-        else
-        {
+        if (gsm_ret != GSM_OK)
             ESP_LOGW(TAG, "GSM registration failed: %s", gsm_err_to_str(gsm_ret));
-        }
     }
     else
     {
@@ -226,6 +212,10 @@ void app_main(void)
     ESP_ERROR_CHECK(led_init(&cloud_led));
     led_off(&cloud_led);
 
+    led_t gsm_led = {.pin = GSM_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&gsm_led));
+    led_off(&gsm_led);
+
     uint32_t display_tick = 0;
     uint32_t last_upload_count = 0;
     uint32_t elapsed_s = 0;
@@ -267,6 +257,17 @@ void app_main(void)
         {
             led_off(&cloud_led);
             cloud_blink_until = 0;
+        }
+
+        if (cloud_sync_is_gsm_mode())
+        {
+            if (gsm_led.mode != LED_MODE_ON)
+                led_on(&gsm_led);
+        }
+        else
+        {
+            if (gsm_led.mode != LED_MODE_OFF)
+                led_off(&gsm_led);
         }
 
         if (display_tick == 0U)

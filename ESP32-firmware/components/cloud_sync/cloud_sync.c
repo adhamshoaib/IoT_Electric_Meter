@@ -10,6 +10,7 @@
 #include "http_client.h"
 #include "wifi_sta.h"
 #include "energy_metering.h"
+#include "gsm_driver.h"
 
 #include <stdatomic.h>
 #include <time.h>
@@ -23,6 +24,7 @@ static atomic_bool s_time_synced = false;
 static atomic_bool s_task_running = false;
 static atomic_bool s_stop_requested = false;
 static atomic_uint s_upload_count = 0;
+static atomic_bool s_gsm_mode = false;
 
 static uint32_t s_upload_interval_ms = CLOUD_SYNC_DEFAULT_INTERVAL_MS;
 static uint32_t s_retry_delay_ms = CLOUD_SYNC_DEFAULT_RETRY_MS;
@@ -93,6 +95,39 @@ static time_t cloud_sync_get_timestamp(void)
     return now;
 }
 
+static esp_err_t cloud_sync_upload_via_gsm(time_t ts, float energy_kwh)
+{
+    char body[128];
+    snprintf(body, sizeof(body),
+             "{\"ts\": %lld, \"energy_kwh\": %.6f}",
+             (long long)ts, energy_kwh);
+
+    char headers[64];
+    snprintf(headers, sizeof(headers), "x-api-key: %s", CONFIG_API_KEY);
+
+    gsm_http_response_t resp;
+    gsm_err_t ret = gsm_http_post(
+        "http://sem-rtdb-backend.onrender.com/reading",
+        body, strlen(body),
+        "application/json",
+        headers,
+        &resp);
+
+    if (ret != GSM_OK)
+    {
+        ESP_LOGW(TAG, "GSM POST failed: %s", gsm_err_to_str(ret));
+        return ESP_FAIL;
+    }
+
+    if (resp.status_code != 200)
+    {
+        ESP_LOGW(TAG, "GSM HTTP error: %d", resp.status_code);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
 static void cloud_sync_task_entry(void *arg)
 {
     (void)arg;
@@ -103,19 +138,44 @@ static void cloud_sync_task_entry(void *arg)
     {
         const uint32_t sleep_ms = atomic_load(&s_stop_requested) ? 100 : s_upload_interval_ms;
 
-        if (!wifi_is_connected())
+        bool wifi_ok = wifi_is_connected();
+
+        if (!wifi_ok && !atomic_load(&s_gsm_mode))
         {
-            ESP_LOGD(TAG, "WiFi not connected, skipping upload");
-            vTaskDelay(pdMS_TO_TICKS(sleep_ms));
-            continue;
+            atomic_store(&s_gsm_mode, true);
+            ESP_LOGI(TAG, "WiFi not connected — switching to GSM fallback");
+        }
+        else if (wifi_ok && atomic_load(&s_gsm_mode))
+        {
+            atomic_store(&s_gsm_mode, false);
+            ESP_LOGI(TAG, "WiFi reconnected — switching back from GSM");
         }
 
         if (!atomic_load(&s_time_synced))
         {
-            ESP_LOGI(TAG, "Time not synchronized, attempting sync");
-            (void)cloud_sync_obtain_time();
+            if (wifi_ok)
+            {
+                ESP_LOGI(TAG, "Time not synchronized, attempting sync");
+                (void)cloud_sync_obtain_time();
+            }
             if (!atomic_load(&s_time_synced))
             {
+                vTaskDelay(pdMS_TO_TICKS(s_retry_delay_ms));
+                continue;
+            }
+        }
+
+        if (!wifi_ok && !gsm_gprs_is_connected())
+        {
+            gsm_gprs_config_t gprs_cfg = {
+                .apn = CONFIG_CLOUD_SYNC_GSM_APN,
+                .user = CONFIG_CLOUD_SYNC_GSM_USER,
+                .pass = CONFIG_CLOUD_SYNC_GSM_PASS,
+            };
+            gsm_err_t gprs_ret = gsm_gprs_connect(&gprs_cfg);
+            if (gprs_ret != GSM_OK)
+            {
+                ESP_LOGW(TAG, "GPRS connect failed: %s", gsm_err_to_str(gprs_ret));
                 vTaskDelay(pdMS_TO_TICKS(s_retry_delay_ms));
                 continue;
             }
@@ -138,10 +198,15 @@ static void cloud_sync_task_entry(void *arg)
             continue;
         }
 
-        ESP_LOGI(TAG, "Uploading: ts=%lld, energy=%.6f kWh",
-                 (long long)ts, data.total_energy_kwh);
+        if (wifi_ok)
+        {
+            ret = firebase_post(ts, data.total_energy_kwh);
+        }
+        else
+        {
+            ret = cloud_sync_upload_via_gsm(ts, data.total_energy_kwh);
+        }
 
-        ret = firebase_post(ts, data.total_energy_kwh);
         if (ret == ESP_OK)
         {
             ESP_LOGI(TAG, "Upload successful");
@@ -274,6 +339,11 @@ esp_err_t cloud_sync_stop_task(void)
 
     ESP_LOGI(TAG, "Cloud sync task stopped");
     return ESP_OK;
+}
+
+bool cloud_sync_is_gsm_mode(void)
+{
+    return atomic_load(&s_gsm_mode);
 }
 
 bool cloud_sync_is_time_synced(void)

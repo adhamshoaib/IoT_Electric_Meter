@@ -17,6 +17,8 @@ esp_err_t cloud_sync_start_task(void);
 
 esp_err_t cloud_sync_stop_task(void);
 
+bool cloud_sync_is_gsm_mode(void);
+
 bool cloud_sync_is_time_synced(void);
 
 bool cloud_sync_is_task_running(void);
