@@ -6,12 +6,24 @@
 #include "i2c_service.h"
 
 #include <stdbool.h>
+#include <string.h>
 
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 #define I2C_MUTEX_TIMEOUT_MS 100
 #define I2C_XFER_TIMEOUT_MS 100
+#define I2C_SERVICE_MAX_DEVICES 8
+
+static esp_err_t i2c_service_add_temp_device(uint8_t dev_addr, i2c_master_dev_handle_t *out_dev);
+
+typedef struct
+{
+    uint8_t dev_addr;
+    i2c_master_dev_handle_t dev_handle;
+    bool in_use;
+} i2c_service_device_entry_t;
 
 typedef struct
 {
@@ -19,9 +31,11 @@ typedef struct
     uint32_t clk_hz;
     i2c_master_bus_handle_t bus_handle;
     SemaphoreHandle_t mutex;
+    i2c_service_device_entry_t devices[I2C_SERVICE_MAX_DEVICES];
 } i2c_service_state_t;
 
 static i2c_service_state_t s_state = {0};
+static const char *TAG = "i2c_service";
 
 static TickType_t i2c_service_mutex_timeout_ticks(void)
 {
@@ -32,6 +46,63 @@ static TickType_t i2c_service_mutex_timeout_ticks(void)
 static bool i2c_service_is_dev_addr_valid(uint8_t dev_addr)
 {
     return dev_addr <= 0x7FU;
+}
+
+static i2c_service_device_entry_t *i2c_service_find_device(uint8_t dev_addr)
+{
+    for (int i = 0; i < I2C_SERVICE_MAX_DEVICES; i++)
+    {
+        if (s_state.devices[i].in_use && s_state.devices[i].dev_addr == dev_addr)
+        {
+            return &s_state.devices[i];
+        }
+    }
+    return NULL;
+}
+
+static i2c_service_device_entry_t *i2c_service_alloc_device(void)
+{
+    for (int i = 0; i < I2C_SERVICE_MAX_DEVICES; i++)
+    {
+        if (!s_state.devices[i].in_use)
+        {
+            return &s_state.devices[i];
+        }
+    }
+    return NULL;
+}
+
+static esp_err_t i2c_service_get_or_create_device(uint8_t dev_addr, i2c_master_dev_handle_t *out_handle)
+{
+    if (out_handle == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    i2c_service_device_entry_t *entry = i2c_service_find_device(dev_addr);
+    if (entry != NULL)
+    {
+        *out_handle = entry->dev_handle;
+        return ESP_OK;
+    }
+
+    entry = i2c_service_alloc_device();
+    if (entry == NULL)
+    {
+        ESP_LOGW(TAG, "Device table full, falling back to temporary handle");
+        return i2c_service_add_temp_device(dev_addr, out_handle);
+    }
+
+    esp_err_t ret = i2c_service_add_temp_device(dev_addr, &entry->dev_handle);
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    entry->dev_addr = dev_addr;
+    entry->in_use = true;
+    *out_handle = entry->dev_handle;
+    return ESP_OK;
 }
 
 static esp_err_t i2c_service_lock(void)
@@ -125,6 +196,15 @@ esp_err_t i2c_service_deinit(void)
         return ret;
     }
 
+    for (int i = 0; i < I2C_SERVICE_MAX_DEVICES; i++)
+    {
+        if (s_state.devices[i].in_use)
+        {
+            (void)i2c_master_bus_rm_device(s_state.devices[i].dev_handle);
+            s_state.devices[i].in_use = false;
+        }
+    }
+
     ret = i2c_del_master_bus(s_state.bus_handle);
 
     i2c_service_unlock();
@@ -135,7 +215,7 @@ esp_err_t i2c_service_deinit(void)
     }
 
     vSemaphoreDelete(s_state.mutex);
-    s_state = (i2c_service_state_t){0};
+    memset(&s_state, 0, sizeof(s_state));
 
     return ESP_OK;
 }
@@ -159,16 +239,10 @@ esp_err_t i2c_service_write(uint8_t dev_addr, const uint8_t *data, size_t len)
     }
 
     i2c_master_dev_handle_t dev_handle = NULL;
-    ret = i2c_service_add_temp_device(dev_addr, &dev_handle);
+    ret = i2c_service_get_or_create_device(dev_addr, &dev_handle);
     if (ret == ESP_OK)
     {
         ret = i2c_master_transmit(dev_handle, data, len, I2C_XFER_TIMEOUT_MS);
-
-        esp_err_t rm_ret = i2c_master_bus_rm_device(dev_handle);
-        if (ret == ESP_OK && rm_ret != ESP_OK)
-        {
-            ret = rm_ret;
-        }
     }
 
     i2c_service_unlock();
@@ -194,7 +268,7 @@ esp_err_t i2c_service_write_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *ou
     }
 
     i2c_master_dev_handle_t dev_handle = NULL;
-    ret = i2c_service_add_temp_device(dev_addr, &dev_handle);
+    ret = i2c_service_get_or_create_device(dev_addr, &dev_handle);
     if (ret == ESP_OK)
     {
         ret = i2c_master_transmit_receive(dev_handle,
@@ -203,12 +277,6 @@ esp_err_t i2c_service_write_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *ou
                                           out,
                                           len,
                                           I2C_XFER_TIMEOUT_MS);
-
-        esp_err_t rm_ret = i2c_master_bus_rm_device(dev_handle);
-        if (ret == ESP_OK && rm_ret != ESP_OK)
-        {
-            ret = rm_ret;
-        }
     }
 
     i2c_service_unlock();
@@ -223,4 +291,32 @@ i2c_master_bus_handle_t i2c_service_get_bus_handle(void)
     }
 
     return s_state.bus_handle;
+}
+
+esp_err_t i2c_service_remove_device(uint8_t dev_addr)
+{
+    if (!s_state.initialized)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t ret = i2c_service_lock();
+    if (ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    i2c_service_device_entry_t *entry = i2c_service_find_device(dev_addr);
+    if (entry == NULL)
+    {
+        i2c_service_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    ret = i2c_master_bus_rm_device(entry->dev_handle);
+    entry->in_use = false;
+    entry->dev_handle = NULL;
+
+    i2c_service_unlock();
+    return ret;
 }

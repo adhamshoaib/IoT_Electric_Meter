@@ -1,0 +1,7 @@
+menu "HTTP Client Configuration"
+
+    config API_KEY
+        string "API Key for backend"
+        default "sem-prod-x7k9m2p4q8"
+
+endmenu

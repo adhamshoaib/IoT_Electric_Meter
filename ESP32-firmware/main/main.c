@@ -1,188 +1,277 @@
-#include "ads1115.h"
+#include "BL0939.h"
+#include "energy_metering.h"
+#include "uart_service.h"
+#include "oled_display.h"
+#include "i2c_service.h"
+#include "wifi_sta.h"
+#include "led_driver.h"
+#include "cloud_sync.h"
+
+#include <stdio.h>
+#include "nvs_flash.h"
+#include "driver/gpio.h"
+#include "driver/uart.h"
 #include "esp_err.h"
 #include "esp_log.h"
-#include "http_client.h"
-#include "current_sensor.h"
-#include "energy_calc.h"
-#include "energy_config.h"
-#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "i2c_service.h"
-#include "lwip/apps/sntp.h"
-#include "nvs_flash.h"
-#include "voltage_sensor.h"
-#include "wifi.h"
 
-#include <sys/time.h>
-#include <time.h>
+#define OLED_I2C_SDA GPIO_NUM_21
+#define OLED_I2C_SCL GPIO_NUM_22
+#define OLED_I2C_CLK_HZ 100000
+#define OLED_I2C_PORT I2C_NUM_0
 
-#define I2C_PORT I2C_NUM_0
-#define I2C_SDA_PIN GPIO_NUM_19
-#define I2C_SCL_PIN GPIO_NUM_18
-#define I2C_FREQ_HZ 400000
+#define BL0939_UART_PORT UART_NUM_2
+#define BL0939_UART_TX_PIN GPIO_NUM_17
+#define BL0939_UART_RX_PIN GPIO_NUM_16
+#define BL0939_UART_BAUD_RATE 4800
+#define BL0939_DEVICE_ADDRESS 0U
 
-#define ADS1115_VOLTAGE_CHANNEL 0
-#define ADS1115_GAIN_VOLTAGE ADS_FSR_4_096V
-#define ADS1115_GAIN_CURRENT ADS_FSR_1_024V
-#define RMS_SAMPLE_COUNT 128
-#define RMS_LOG_PERIOD_MS 1000
-#define CURRENT_NOISE_FLOOR_A 0.02f
-#define ADS1115_SAMPLE_RATE_SPS 860.0f
-#define WINDOW_DURATION_S ((float)RMS_SAMPLE_COUNT / ADS1115_SAMPLE_RATE_SPS)
-#define CLOUD_POST_PERIOD_MS 5000
+#define BL0939_DEFAULT_TIMEOUT_MS 500U
+#define BL0939_READ_PERIOD_MS 1000U
+#define LOAD_CHECK_PERIOD_MS 50U
 
-static const char *TAG = "main";
+#define LOAD_LED_GPIO GPIO_NUM_18
+#define WIFI_LED_GPIO GPIO_NUM_19
+#define CLOUD_LED_GPIO GPIO_NUM_23
 
-static ads1115_t s_ads1115;
-static adc_sample_pair_t s_adc_samples[RMS_SAMPLE_COUNT];
-static int16_t s_current_raw_samples[RMS_SAMPLE_COUNT];
-static float s_voltage_samples_v[RMS_SAMPLE_COUNT];
-static float s_current_samples_a[RMS_SAMPLE_COUNT];
-static float s_energy_kwh = 0.0f;
+static const char *TAG = "MAIN";
 
-static void obtain_time(void)
+static esp_err_t init_meter(uart_service_handle_t *out_uart)
 {
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_init();
-
-    time_t now = 0;
-    struct tm timeinfo = {0};
-    while (timeinfo.tm_year < (2020 - 1900))
+    if (out_uart == NULL)
     {
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGI(TAG, "Time synchronized");
-}
+    const uart_service_config_t uart_cfg = {
+        .port = BL0939_UART_PORT,
+        .tx_pin = BL0939_UART_TX_PIN,
+        .rx_pin = BL0939_UART_RX_PIN,
+        .baud_rate = BL0939_UART_BAUD_RATE,
+        .rx_buffer_size = 256,
+        .tx_buffer_size = 0,
+    };
 
-static float compute_mean_raw(const int16_t *samples, size_t count)
-{
-    float mean_raw = 0.0f;
-    for (size_t i = 0; i < count; ++i)
+    esp_err_t ret = uart_service_init(&uart_cfg, out_uart);
+    if (ret != ESP_OK)
     {
-        mean_raw += (float)samples[i];
+        return ret;
     }
 
-    return mean_raw / (float)count;
-}
-
-static float compute_voltage_mean_raw(const adc_sample_pair_t *pairs, size_t count)
-{
-    float mean_raw = 0.0f;
-    for (size_t i = 0; i < count; ++i)
+    ret = uart_service_set_stop_bits(*out_uart, UART_STOP_BITS_2);
+    if (ret != ESP_OK)
     {
-        mean_raw += (float)pairs[i].v_raw;
+        (void)uart_service_deinit(out_uart);
+        return ret;
     }
 
-    return mean_raw / (float)count;
+    const bl0939_config_t bl_cfg = {
+        .uart = *out_uart,
+        .device_address = BL0939_DEVICE_ADDRESS,
+        .calibration = {
+            .voltage_ref = 1.007f,
+            .current_ref = 1.0f,
+            .energy_ref = 1.0f,
+        },
+        .phase_compensation = {
+            .corner_a = 0x0000,
+            .corner_b = 0x0000,
+        },
+        .current_channel = BL0939_CURRENT_CHANNEL_SUM,
+        .default_timeout_ms = BL0939_DEFAULT_TIMEOUT_MS,
+        .auto_request_before_read = true,
+    };
+
+    ret = bl0939_init(&bl_cfg);
+    if (ret != ESP_OK)
+    {
+        (void)uart_service_deinit(out_uart);
+        return ret;
+    }
+
+    return ESP_OK;
 }
 
 void app_main(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    uart_service_handle_t uart = NULL;
+
+    esp_err_t nvs_ret = nvs_flash_init();
+    if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES || nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
         ESP_ERROR_CHECK(nvs_flash_erase());
-        ESP_ERROR_CHECK(nvs_flash_init());
+        nvs_ret = nvs_flash_init();
     }
+    ESP_ERROR_CHECK(nvs_ret);
 
     wifi_init();
-    wifi_wait_connected();
-    ESP_LOGI(TAG, "WiFi connected, starting SNTP");
-    obtain_time();
+    ESP_LOGI(TAG, "WiFi connecting in background...");
 
-    ESP_ERROR_CHECK(i2c_service_init(I2C_PORT, I2C_SDA_PIN, I2C_SCL_PIN, I2C_FREQ_HZ));
-
-    i2c_master_bus_handle_t bus_handle = i2c_service_get_bus_handle();
-    if (bus_handle == NULL)
+    esp_err_t ret = init_meter(&uart);
+    if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to get I2C bus handle");
+        ESP_LOGE(TAG, "Meter initialization failed: %s", esp_err_to_name(ret));
         return;
     }
 
-    ESP_ERROR_CHECK(ads1115_init(&s_ads1115, &bus_handle, ADS_I2C_ADDR_GND, I2C_FREQ_HZ));
-    ads1115_set_gain(&s_ads1115, ADS1115_GAIN_VOLTAGE);
-    ads1115_set_sps(&s_ads1115, ADS_SPS_860);
-    ESP_LOGI(TAG, "ADS1115 initialized at 0x%02X", ADS_I2C_ADDR_GND);
+    const energy_metering_config_t em_cfg = ENERGY_METERING_CONFIG_DEFAULT();
 
-    TickType_t last_cloud_post_tick = xTaskGetTickCount();
-
-    while (1)
+    ret = energy_metering_init(&em_cfg);
+    if (ret != ESP_OK)
     {
-        for (size_t i = 0; i < RMS_SAMPLE_COUNT; ++i)
+        ESP_LOGE(TAG, "Energy metering initialization failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    const energy_metering_task_config_t em_task_cfg = {
+        .task_name = "energy_meter_task",
+        .stack_size = 4096U,
+        .priority = 5U,
+        .period_ms = BL0939_READ_PERIOD_MS,
+    };
+
+    ret = energy_metering_start_task(&em_task_cfg);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Energy metering task start failed: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(TAG, "BL0939 meter started (UART%d TX=%d RX=%d ADDR=%u)",
+             BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
+    ret = i2c_service_init(OLED_I2C_PORT, OLED_I2C_SDA, OLED_I2C_SCL, OLED_I2C_CLK_HZ);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "I2C service init failed: %s", esp_err_to_name(ret));
+    }
+
+    bool oled_ok = false;
+    oled_display_handle_t oled;
+    if (ret == ESP_OK)
+    {
+        ret = oled_display_init(&oled);
+        if (ret == ESP_OK)
         {
-            ads1115_set_gain(&s_ads1115, ADS1115_GAIN_VOLTAGE);
-            const int16_t raw_voltage = (int16_t)ads1115_get_raw(&s_ads1115, ADS1115_VOLTAGE_CHANNEL);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            oled_display_clear(&oled);
+            oled_ok = true;
+            ESP_LOGI(TAG, "OLED display initialized");
+        }
+        else
+        {
+            ESP_LOGE(TAG, "OLED init failed: %s", esp_err_to_name(ret));
+        }
+    }
 
-            ads1115_set_gain(&s_ads1115, ADS1115_GAIN_CURRENT);
-            const int16_t raw_current = ads1115_differential_2_3(&s_ads1115);
+    wifi_wait_connected();
+    ESP_LOGI(TAG, "WiFi connected");
 
-            s_adc_samples[i].v_raw = raw_voltage;
-            s_adc_samples[i].i_raw = raw_current;
-            s_current_raw_samples[i] = raw_current;
+    ret = cloud_sync_init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Cloud sync init failed: %s", esp_err_to_name(ret));
+    }
+    else
+    {
+        ret = cloud_sync_start_task();
+        if (ret != ESP_OK)
+        {
+            ESP_LOGE(TAG, "Cloud sync task start failed: %s", esp_err_to_name(ret));
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Cloud sync task started");
+        }
+    }
 
-            s_voltage_samples_v[i] = voltage_sensor_convert(raw_voltage);
-            s_current_samples_a[i] = current_sensor_convert(raw_current);
+    led_t load_led = {.pin = LOAD_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&load_led));
+
+    led_t wifi_led = {.pin = WIFI_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&wifi_led));
+    led_off(&wifi_led);
+
+    led_t cloud_led = {.pin = CLOUD_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&cloud_led));
+    led_off(&cloud_led);
+
+    uint32_t display_tick = 0;
+    uint32_t last_upload_count = 0;
+    uint32_t elapsed_s = 0;
+    TickType_t cloud_blink_until = 0;
+
+    while (true)
+    {
+        if (energy_metering_is_load_connected())
+        {
+            if (load_led.mode != LED_MODE_ON)
+                led_on(&load_led);
+        }
+        else
+        {
+            if (load_led.mode != LED_MODE_OFF)
+                led_off(&load_led);
         }
 
-        const float voltage_mean_raw = compute_voltage_mean_raw(s_adc_samples, RMS_SAMPLE_COUNT);
-        const float current_mean_raw = compute_mean_raw(s_current_raw_samples, RMS_SAMPLE_COUNT);
-
-        const float voltage_rms = voltage_sensor_rms(s_adc_samples, RMS_SAMPLE_COUNT);
-        float current_rms = current_sensor_rms(s_current_raw_samples, RMS_SAMPLE_COUNT);
-        if (current_rms < CURRENT_NOISE_FLOOR_A)
+        if (wifi_is_connected())
         {
-            current_rms = 0.0f;
+            if (wifi_led.mode != LED_MODE_ON)
+                led_on(&wifi_led);
+        }
+        else
+        {
+            if (wifi_led.mode != LED_MODE_OFF)
+                led_off(&wifi_led);
         }
 
-        power_calc_result_t power = {0};
-        ESP_ERROR_CHECK(energy_calc_power(&power,
-                                          s_voltage_samples_v,
-                                          s_current_samples_a,
-                                          RMS_SAMPLE_COUNT,
-                                          CURRENT_PHASE_ADVANCE_SAMPLES,
-                                          VOLTAGE_PHASE_ADVANCE_SAMPLES));
-        ESP_ERROR_CHECK(energy_calc_accumulate_kwh(&s_energy_kwh,
-                                                   power.real_power_w,
-                                                   WINDOW_DURATION_S));
-
-        const TickType_t now_tick = xTaskGetTickCount();
-        if ((now_tick - last_cloud_post_tick) >= pdMS_TO_TICKS(CLOUD_POST_PERIOD_MS))
+        uint32_t cur_count = cloud_sync_get_upload_count();
+        if (cur_count != last_upload_count)
         {
-            last_cloud_post_tick = now_tick;
+            last_upload_count = cur_count;
+            led_on(&cloud_led);
+            cloud_blink_until = xTaskGetTickCount() + pdMS_TO_TICKS(100);
+        }
 
-            time_t ts = 0;
-            time(&ts);
+        if (cloud_blink_until != 0 && xTaskGetTickCount() >= cloud_blink_until)
+        {
+            led_off(&cloud_led);
+            cloud_blink_until = 0;
+        }
 
-            if (wifi_is_connected())
+        if (display_tick == 0U)
+        {
+            energy_metering_data_t m;
+            elapsed_s += 5U;
+            ret = energy_metering_get_latest(&m);
+            if (ret == ESP_OK)
             {
-                const esp_err_t post_err = firebase_post(ts, s_energy_kwh);
-                if (post_err != ESP_OK)
+                ESP_LOGI(TAG,
+                         "Voltage: %.2f V | Current: %.3f A | Energy: %.6f kWh | Elapsed: %u s",
+                         m.voltage_v,
+                         m.current_a,
+                         m.total_energy_kwh,
+                         (unsigned)elapsed_s);
+
+                if (oled_ok)
                 {
-                    ESP_LOGW(TAG, "Cloud post failed: %s", esp_err_to_name(post_err));
+                    char line[48];
+                    oled_display_clear_buffer(&oled);
+                    snprintf(line, sizeof(line), "%.6f", m.total_energy_kwh);
+                    int len = strlen(line);
+                    int x_start = (len * 12 < 128) ? (128 - len * 12) / 2 : 0;
+                    oled_display_write_scaled_string(&oled, x_start, 4, 2, line);
+                    oled_display_write_scaled_string(&oled, (128 - 3 * 12) / 2, 36, 2, "kWh");
+                    oled_display_flush(&oled);
                 }
             }
             else
             {
-                ESP_LOGW(TAG, "WiFi disconnected, skip cloud post");
+                ESP_LOGW(TAG, "energy_metering_get_latest failed: %s", esp_err_to_name(ret));
             }
         }
 
-        ESP_LOGI(TAG,
-                 "V_rms=%.2f V (mean=%.1f raw) | I_rms=%.3f A (mean=%.1f raw) | P=%.2f W | S=%.2f VA | PF=%.3f | E=%.6f kWh",
-                 voltage_rms,
-                 voltage_mean_raw,
-                 current_rms,
-                 current_mean_raw,
-                 power.real_power_w,
-                 power.apparent_power_va,
-                 power.power_factor,
-                 s_energy_kwh);
-
-        vTaskDelay(pdMS_TO_TICKS(RMS_LOG_PERIOD_MS));
+        display_tick = (display_tick + 1U) % 100U;
+        vTaskDelay(pdMS_TO_TICKS(LOAD_CHECK_PERIOD_MS));
     }
 }

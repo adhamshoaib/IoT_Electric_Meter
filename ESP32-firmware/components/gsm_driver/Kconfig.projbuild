@@ -1,0 +1,18 @@
+menu "GSM Driver Configuration"
+
+    config GSM_PHONE_NUMBER
+        string "Phone number for SMS notifications"
+        default "+201001234567"
+        help
+            The phone number (in E.164 format) where the GSM module
+            sends boot-time SMS alerts.
+
+    config GSM_FORCE_HTTP
+        bool "Force HTTP (disable SSL detection)"
+        default n
+        help
+            Some SIM800 modules falsely report SSL support but fail
+            on actual TLS handshakes. Enable this to skip the SSL
+            detection and always use plain HTTP.
+
+endmenu
