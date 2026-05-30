@@ -502,6 +502,20 @@ bool energy_metering_is_load_connected(void)
     return atomic_load(&s_ctx.load_connected);
 }
 
+float energy_metering_get_total_energy_kwh(void)
+{
+    if (!s_ctx.initialized)
+        return 0.0f;
+
+    float energy = 0.0f;
+    if (lock_take())
+    {
+        energy = s_ctx.total_energy_kwh;
+        lock_give();
+    }
+    return energy;
+}
+
 esp_err_t energy_metering_deinit(void)
 {
     if (!s_ctx.initialized)
