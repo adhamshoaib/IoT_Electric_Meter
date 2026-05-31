@@ -136,6 +136,7 @@ typedef struct
     float voltage_ref; /**< Divisor converting v_rms raw counts to volts. */
     float current_ref; /**< Divisor converting i_rms raw counts to amperes. */
     float energy_ref;  /**< Divisor converting CF pulse counts to kWh. */
+    float power_ref;   /**< Divisor converting raw WATT register to real watts. */
 } bl0939_calibration_t;
 
 /**
@@ -226,13 +227,16 @@ typedef struct
  */
 typedef struct
 {
-    float voltage_v;    /**< RMS line voltage in volts. */
-    float current_a;    /**< Active channel current in amperes (see bl0939_current_channel_t). */
-    float current_ia_a; /**< Channel A current in amperes (always populated regardless of active channel). */
-    float current_ib_a; /**< Channel B current in amperes (always populated regardless of active channel). */
-    float energy_kwh;   /**< Combined energy (A + B) in kWh derived from this frame's CF counts. */
-    float energy_a_kwh; /**< Channel A energy in kWh derived from this frame's CF count. */
-    float energy_b_kwh; /**< Channel B energy in kWh derived from this frame's CF count. */
+    float voltage_v;        /**< RMS line voltage in volts. */
+    float current_a;        /**< Active channel current in amperes (see bl0939_current_channel_t). */
+    float current_ia_a;     /**< Channel A current in amperes (always populated regardless of active channel). */
+    float current_ib_a;     /**< Channel B current in amperes (always populated regardless of active channel). */
+    float energy_kwh;       /**< Combined energy (A + B) in kWh derived from this frame's CF counts. */
+    float energy_a_kwh;     /**< Channel A energy in kWh derived from this frame's CF count. */
+    float energy_b_kwh;     /**< Channel B energy in kWh derived from this frame's CF count. */
+    float active_power_w;   /**< Instantaneous active power in watts (from WATT register). */
+    float apparent_power_va; /**< Apparent power in VA (= V_rms * I_rms). */
+    float power_factor;     /**< Power factor (active / apparent), clamped to [0.0, 1.0]. */
 } bl0939_measurements_t;
 
 /* -------------------------------------------------------------------------

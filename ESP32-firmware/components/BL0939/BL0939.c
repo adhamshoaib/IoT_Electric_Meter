@@ -779,6 +779,21 @@ esp_err_t bl0939_read_measurements(bl0939_measurements_t *out_measurements, uint
         break;
     }
 
+    int32_t watt_sum = raw.a_watt + raw.b_watt;
+    if (watt_sum < 0) watt_sum = -watt_sum;
+    measurements.active_power_w = (float)watt_sum / cal->power_ref;
+    measurements.apparent_power_va = measurements.voltage_v * measurements.current_a;
+    if (measurements.apparent_power_va > 0.0f)
+    {
+        float pf = measurements.active_power_w / measurements.apparent_power_va;
+        if (pf > 1.0f) pf = 1.0f;
+        measurements.power_factor = pf;
+    }
+    else
+    {
+        measurements.power_factor = 0.0f;
+    }
+
     *out_measurements = measurements;
     return ESP_OK;
 }

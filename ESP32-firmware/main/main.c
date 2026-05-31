@@ -284,9 +284,12 @@ void app_main(void)
             if (ret == ESP_OK)
             {
                 ESP_LOGI(TAG,
-                         "Voltage: %.2f V | Current: %.3f A | Energy: %.6f kWh | Elapsed: %u s",
+                         "V: %.1f V | I: %.3f A | P: %.1f W | S: %.1f VA | PF: %.3f | E: %.6f kWh | %u s",
                          m.voltage_v,
                          m.current_a,
+                         m.active_power_w,
+                         m.apparent_power_va,
+                         m.power_factor,
                          m.total_energy_kwh,
                          (unsigned)elapsed_s);
 
