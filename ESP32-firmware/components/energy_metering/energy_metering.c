@@ -145,12 +145,13 @@ static float frame_energy_kwh(const bl0939_raw_data_t *raw)
     s_ctx.prev_cfa_cnt = raw->cfa_cnt;
     s_ctx.prev_cfb_cnt = raw->cfb_cnt;
 
-    const int32_t delta_total = delta_cfa + delta_cfb;
+    int32_t delta_total = delta_cfa + delta_cfb;
     if (delta_total == 0)
     {
         return 0.0f;
     }
 
+    if (delta_total < 0) delta_total = -delta_total;
     return (float)delta_total / s_ctx.energy_divisor;
 }
 
