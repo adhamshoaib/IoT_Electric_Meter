@@ -67,7 +67,7 @@ const calculateCost = (kwh) => {
   }
 };
 
-const lastWeekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 //const lastWeekKwh = [12.4, 10.8, 13.1, 11.5, 14.2, 16.8, 15.3];
 
 //const previousWeekKwh = [10.9, 10.2, 11.8, 10.7, 12.6, 14.9, 13.8];
@@ -75,67 +75,92 @@ const lastWeekLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export default function StatisticsScreen({ onBack }) {
 
 const [lastWeekKwh, setLastWeekKwh] = useState([0,0,0,0,0,0,0]);
+const [lastWeekLabels, setLastWeekLabels] = useState(['D-6','D-5','D-4','D-3','D-2','D-1','Today']);
 const [previousWeekKwh, setPreviousWeekKwh] = useState([0,0,0,0,0,0,0]);
 const [monthlyHistory, setMonthlyHistory] = useState([]);
 const [isLoading, setIsLoading] = useState(true);
 
-const processWeeklyData = (readings) => {
-  const currentWeek = [0,0,0,0,0,0,0];
-  const previousWeek = [0,0,0,0,0,0,0];
+const START_TS = 1779991488;
 
-  // FIX: compare calendar dates (midnight), not raw ms, to avoid hour-based misclassification
-  const nowMidnight = new Date();
-  nowMidnight.setHours(0, 0, 0, 0);
+// Groups logs by calendar day and returns sorted array of { dateKey, kwh, dayIndex, ts }
+const buildDailyConsumption = (readings) => {
+  const sorted = [...readings]
+    .filter(r => r.ts != null && r.energy_kwh != null && r.ts >= START_TS)
+    .sort((a, b) => a.ts - b.ts);
 
-  readings.forEach((reading) => {
-    // FIX: use == null so readings with energy_kwh = 0 are NOT skipped
-    if (!reading.ts || reading.energy_kwh == null) return;
-
-    const dateMidnight = new Date(reading.ts * 1000);
-    dateMidnight.setHours(0, 0, 0, 0);
-
-    const diffDays = Math.floor(
-      (nowMidnight - dateMidnight) / (1000 * 60 * 60 * 24)
-    );
-
-    const dayIndex = new Date(reading.ts * 1000).getDay();
-
-    if (diffDays < 7) {
-      currentWeek[dayIndex] += reading.energy_kwh;
-    } else if (diffDays < 14) {
-      previousWeek[dayIndex] += reading.energy_kwh;
-    }
+  // Group by calendar date key YYYY-MM-DD
+  const byDay = {};
+  sorted.forEach(r => {
+    const d = new Date(r.ts * 1000);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    if (!byDay[key]) byDay[key] = [];
+    byDay[key].push(r);
   });
 
-  setLastWeekKwh(currentWeek);
-  setPreviousWeekKwh(previousWeek);
+  // Each day = last log of day - first log of day
+  return Object.keys(byDay).sort().map(key => {
+    const logs = byDay[key];
+// Each day = last reading of the day - last reading of the previous day
+const previousDayLastReading =
+  sorted.findLast(r => r.ts < logs[0].ts)?.energy_kwh ?? logs[0].energy_kwh;
+
+const currentDayLastReading = logs[logs.length - 1].energy_kwh;
+
+const kwh = Math.max(0, currentDayLastReading - previousDayLastReading);
+    const d = new Date(logs[0].ts * 1000);
+    return { dateKey: key, kwh, dayIndex: d.getDay(), ts: logs[0].ts };
+  });
+};
+
+const processWeeklyData = (readings) => {
+  const days = buildDailyConsumption(readings);
+
+  if (days.length === 0) {
+    setLastWeekKwh([0]);
+    setPreviousWeekKwh([0]);
+    setLastWeekLabels(['Today']);
+    return;
+  }
+
+  // Last 7 days = this week, 7 before that = previous week
+  const last7 = days.slice(-7);
+  const prev7 = days.slice(-14, -7);
+
+  // Labels from real day names, rightmost = Today
+  const labels = last7.map((d, i) =>
+    i === last7.length - 1 ? 'Today' : DAY_LABELS[d.dayIndex]
+  );
+
+  setLastWeekLabels(labels);
+  setLastWeekKwh(last7.map(d => d.kwh));
+  setPreviousWeekKwh(prev7.map(d => d.kwh));
 };
 
 const processMonthlyData = (readings) => {
-  const monthMap = {};
-  const now = new Date();
+  const days = buildDailyConsumption(readings);
 
-  // Build last 6 calendar months (excluding current month)
-  for (let i = 1; i <= 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    monthMap[key] = { year: d.getFullYear(), month: d.getMonth(), kwh: 0 };
+  if (days.length === 0) {
+    setMonthlyHistory([]);
+    return;
   }
 
-  readings.forEach((reading) => {
-    if (!reading.ts || reading.energy_kwh == null) return;
-    const date = new Date(reading.ts * 1000);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    if (monthMap[key]) {
-      monthMap[key].kwh += reading.energy_kwh;
-    }
+  // Group daily consumptions by calendar month
+  const byMonth = {};
+  days.forEach(d => {
+    const [y, m] = d.dateKey.split('-');
+    const key = `${y}-${m}`;
+    if (!byMonth[key]) byMonth[key] = 0;
+    byMonth[key] += d.kwh;
   });
 
-  // Sort newest first
-  const sorted = Object.values(monthMap).sort(
-    (a, b) => b.year - a.year || b.month - a.month
-  );
-  setMonthlyHistory(sorted);
+  // Sort newest first and build result
+  const result = Object.keys(byMonth).sort().reverse().slice(0, 6).map(key => {
+    const [y, m] = key.split('-').map(Number);
+    const label = new Date(y, m - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+    return { label, kwh: byMonth[key] };
+  });
+
+  setMonthlyHistory(result);
 };
 
 useEffect(() => {
@@ -148,6 +173,8 @@ useEffect(() => {
       return;
     }
     const readings = Object.values(data);
+    console.log('Total logs:', readings.length);
+    console.log('Sample:', readings.slice(-3));
     processWeeklyData(readings);
     processMonthlyData(readings);
     setIsLoading(false);
@@ -207,15 +234,17 @@ useEffect(() => {
             <View>
               <Text style={styles.heroEyebrow}>THIS WEEK</Text>
               <Text style={styles.heroMainValue}>
-                {weekTotalKwh.toFixed(1)}
+                {weekTotalKwh.toFixed(4)}
                 <Text style={styles.heroUnit}> kWh</Text>
               </Text>
               <Text style={styles.heroSubtext}>Estimated cost: EGP {weekTotalCost.toFixed(2)}</Text>
             </View>
 
+            {weeklyChangePercent !== 0 && (
             <View style={styles.heroPill}>
               <Text style={styles.heroPillText}>{trendText}</Text>
             </View>
+            )}
           </View>
 
           <View style={styles.heroDivider} />
@@ -223,17 +252,12 @@ useEffect(() => {
           <View style={styles.heroBottomRow}>
             <View style={styles.heroBottomItem}>
               <Text style={styles.heroBottomLabel}>Average / Day</Text>
-              <Text style={styles.heroBottomValue}>{weekAvgKwh.toFixed(1)} kWh</Text>
+              <Text style={styles.heroBottomValue}>{weekAvgKwh.toFixed(4)} kWh</Text>
             </View>
 
             <View style={styles.heroBottomItem}>
               <Text style={styles.heroBottomLabel}>Peak Day</Text>
               <Text style={styles.heroBottomValue}>{weekMaxDay}</Text>
-            </View>
-
-            <View style={styles.heroBottomItem}>
-              <Text style={styles.heroBottomLabel}>Highest Reading</Text>
-              <Text style={styles.heroBottomValue}>{weekMaxKwh.toFixed(1)} kWh</Text>
             </View>
           </View>
         </View>
@@ -247,14 +271,14 @@ useEffect(() => {
           <View style={styles.comparisonRow}>
             <View style={styles.comparisonItem}>
               <Text style={styles.comparisonLabel}>This Week</Text>
-              <Text style={styles.comparisonValue}>{weekTotalKwh.toFixed(1)} kWh</Text>
+              <Text style={styles.comparisonValue}>{weekTotalKwh.toFixed(4)} kWh</Text>
             </View>
 
             <View style={styles.comparisonDivider} />
 
             <View style={styles.comparisonItem}>
               <Text style={styles.comparisonLabel}>Last Week</Text>
-              <Text style={styles.comparisonValue}>{previousWeekTotalKwh.toFixed(1)} kWh</Text>
+              <Text style={styles.comparisonValue}>{previousWeekTotalKwh.toFixed(4)} kWh</Text>
             </View>
 
             <View style={styles.comparisonDivider} />
@@ -300,7 +324,7 @@ useEffect(() => {
               </View>
             ) : (
               <BarChart
-                data={{ labels: lastWeekLabels, datasets: [{ data: lastWeekKwh }] }}
+                data={{ labels: lastWeekLabels, datasets: [{ data: lastWeekKwh.length ? lastWeekKwh.map(v => parseFloat(v.toFixed(4))) : [0] }] }}
                 width={screenWidth + 160}
                 height={220}
                 chartConfig={chartConfig}
@@ -332,20 +356,16 @@ useEffect(() => {
             <Text style={styles.monthlyEmpty}>No historical data available yet.</Text>
           ) : (
             monthlyHistory.map((item, index) => {
-              const monthName = new Date(item.year, item.month, 1).toLocaleString('default', {
-                month: 'long',
-                year: 'numeric',
-              });
               const cost = calculateCost(item.kwh);
               const isLast = index === monthlyHistory.length - 1;
               return (
-                <View key={`${item.year}-${item.month}`} style={[styles.monthlyRow, isLast && styles.monthlyRowLast]}>
+                <View key={index} style={[styles.monthlyRow, isLast && styles.monthlyRowLast]}>
                   <View style={styles.monthlyDot} />
                   <View style={styles.monthlyInfo}>
-                    <Text style={styles.monthlyName}>{monthName}</Text>
+                    <Text style={styles.monthlyName}>{item.label}</Text>
                   </View>
                   <View style={styles.monthlyValues}>
-                    <Text style={styles.monthlyKwh}>{item.kwh.toFixed(1)} kWh</Text>
+                    <Text style={styles.monthlyKwh}>{item.kwh.toFixed(4)} kWh</Text>
                     <Text style={styles.monthlyCost}>EGP {cost.toFixed(2)}</Text>
                   </View>
                 </View>
