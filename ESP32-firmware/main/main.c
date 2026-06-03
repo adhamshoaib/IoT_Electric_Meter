@@ -34,7 +34,6 @@
 #define LOAD_LED_GPIO GPIO_NUM_18
 #define WIFI_LED_GPIO GPIO_NUM_19
 #define CLOUD_LED_GPIO GPIO_NUM_23
-#define GSM_LED_GPIO GPIO_NUM_27
 
 static const char *TAG = "MAIN";
 
@@ -141,7 +140,6 @@ void app_main(void)
 
     ESP_LOGI(TAG, "BL0939 meter started (UART%d TX=%d RX=%d ADDR=%u)",
              BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
-
     ret = i2c_service_init(OLED_I2C_PORT, OLED_I2C_SDA, OLED_I2C_SCL, OLED_I2C_CLK_HZ);
     if (ret != ESP_OK)
     {
@@ -200,10 +198,8 @@ void app_main(void)
 
     uint32_t display_tick = 0;
     uint32_t last_upload_count = 0;
+    uint32_t elapsed_s = 0;
     TickType_t cloud_blink_until = 0;
-    bool has_baseline = false;
-    float baseline_energy = 0.0f;
-    TickType_t baseline_tick = 0;
 
     while (true)
     {
@@ -246,29 +242,22 @@ void app_main(void)
         if (display_tick == 0U)
         {
             energy_metering_data_t m;
+            elapsed_s += 5U;
             ret = energy_metering_get_latest(&m);
             if (ret == ESP_OK)
             {
-                if (!has_baseline)
-                {
-                    has_baseline = true;
-                    baseline_energy = m.total_energy_kwh;
-                    baseline_tick = xTaskGetTickCount();
-                }
-                float energy_kwh = m.total_energy_kwh - baseline_energy;
-                uint32_t elapsed_s = (xTaskGetTickCount() - baseline_tick) * portTICK_PERIOD_MS / 1000;
                 ESP_LOGI(TAG,
                          "Voltage: %.2f V | Current: %.3f A | Energy: %.6f kWh | Elapsed: %u s",
                          m.voltage_v,
                          m.current_a,
-                         energy_kwh,
+                         m.total_energy_kwh,
                          (unsigned)elapsed_s);
 
                 if (oled_ok)
                 {
                     char line[48];
                     oled_display_clear_buffer(&oled);
-                    snprintf(line, sizeof(line), "%.6f", energy_kwh);
+                    snprintf(line, sizeof(line), "%.6f", m.total_energy_kwh);
                     int len = strlen(line);
                     int x_start = (len * 12 < 128) ? (128 - len * 12) / 2 : 0;
                     oled_display_write_scaled_string(&oled, x_start, 4, 2, line);
