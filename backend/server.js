@@ -84,21 +84,21 @@ async function saveHourlyLog() {
     console.error("Error saving hourly log:", err.message);
   }
 
-  // Delete logs older than 7 days
-  const cutoff = Math.floor(Date.now() / 1000) - CONFIG.LOG_RETENTION_SECONDS;
-  try {
-    const oldLogs = await logsRef.orderByChild("ts").endAt(cutoff).once("value");
-    if (oldLogs.exists()) {
-      const updates = {};
-      oldLogs.forEach((child) => { updates[child.key] = null; });
-      await logsRef.update(updates);
-      console.log(
-        `[${new Date().toLocaleTimeString()}]  Pruned ${Object.keys(updates).length} logs older than 7 days`
-      );
-    }
-  } catch (err) {
-    console.error("Error pruning old logs:", err.message);
-  }
+  // // Delete logs older than 7 days (PAUSED — keeping all logs)
+  // const cutoff = Math.floor(Date.now() / 1000) - CONFIG.LOG_RETENTION_SECONDS;
+  // try {
+  //   const oldLogs = await logsRef.orderByChild("ts").endAt(cutoff).once("value");
+  //   if (oldLogs.exists()) {
+  //     const updates = {};
+  //     oldLogs.forEach((child) => { updates[child.key] = null; });
+  //     await logsRef.update(updates);
+  //     console.log(
+  //       `[${new Date().toLocaleTimeString()}]  Pruned ${Object.keys(updates).length} logs older than 7 days`
+  //     );
+  //   }
+  // } catch (err) {
+  //   console.error("Error pruning old logs:", err.message);
+  // }
 }
 
 // Start the hourly timer
