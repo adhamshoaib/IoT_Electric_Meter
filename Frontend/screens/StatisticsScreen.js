@@ -34,6 +34,10 @@ const chartConfig = {
 
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_LABELS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
 
 export default function StatisticsScreen({ onBack }) {
 
@@ -112,10 +116,10 @@ const processMonthlyData = (readings) => {
 
   // Sort newest first and build result
   const result = Object.keys(byMonth).sort().reverse().slice(0, 6).map(key => {
-    const [y, m] = key.split('-').map(Number);
-    const label = new Date(y, m - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
-    return { label, kwh: byMonth[key] };
-  });
+  const [y, m] = key.split('-').map(Number);
+  const label = `${MONTH_LABELS[m - 1]} ${y}`;
+  return { label, kwh: byMonth[key] };
+});
 
   setMonthlyHistory(result);
 };
