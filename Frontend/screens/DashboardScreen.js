@@ -4,6 +4,7 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
+    RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -26,8 +27,8 @@ const currentBalance = Number(data?.currentBalance ?? 0);
 const availableBalance = Math.max(currentBalance - estimatedBill.totalCost, 0);
 const lastReadingAt = Number(data?.lastReadingAt ?? 0);
 const readingAgeSeconds = lastReadingAt ? (now - lastReadingAt) / 1000 : Infinity;
-
-const isMeterOnline = readingAgeSeconds <= 180;
+const [refreshing, setRefreshing] = useState(false);
+const isMeterOnline = readingAgeSeconds <= 210;
 const lowBalanceThreshold = 50;
 const isLowBalance = availableBalance > 0 && availableBalance < lowBalanceThreshold;
 const isBalanceEmpty = availableBalance <= 0;
@@ -44,11 +45,36 @@ const meterStatusSubtitle = isBalanceEmpty
     : 'Receiving readings normally';
 
 const meterStatusColor = isMeterOff ? '#ef4444' : '#22c55e';
+const formatKwh = (value) => {
+  const n = Number(value ?? 0);
+
+  if (n < 1) return n.toFixed(3);
+  if (n < 10) return n.toFixed(2);
+  return n.toFixed(1);
+};
+const handleRefresh = () => {
+  setRefreshing(true);
+
+  // Firebase already updates automatically, so this mainly refreshes UI/status timing
+  setNow(Date.now());
+
+  setTimeout(() => {
+    setRefreshing(false);
+  }, 900);
+};
   return (
     <ScrollView
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-    >
+  contentContainerStyle={styles.scrollContent}
+  showsVerticalScrollIndicator={false}
+  refreshControl={
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={handleRefresh}
+      tintColor="#0f766e"
+      colors={['#0f766e']}
+    />
+  }
+>
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.welcomeText}>Welcome back, {user.name}</Text>
@@ -73,9 +99,17 @@ const meterStatusColor = isMeterOff ? '#ef4444' : '#22c55e';
         <Text style={styles.heroLabel}>Monthly Consumption</Text>
 
         <View style={styles.heroValueRow}>
-          <Text style={styles.heroValue}>{consumptionValue}</Text>
-          <Text style={styles.heroUnit}>kWh</Text>
-        </View>
+  <Text
+    style={styles.heroValue}
+    numberOfLines={1}
+    adjustsFontSizeToFit
+    minimumFontScale={0.75}
+  >
+    {formatKwh(consumptionValue)}
+  </Text>
+
+  <Text style={styles.heroUnit}>kWh</Text>
+</View>
 
         <Text style={styles.heroNote}>Updated from meter reading</Text>
 
