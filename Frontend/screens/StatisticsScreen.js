@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BarChart } from 'react-native-chart-kit';
 import { ref, onValue } from 'firebase/database';
 import { database } from '../services/firebase';
+import { calculateEgyptBill } from '../services/calculateEgyptBill';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -31,40 +32,6 @@ const chartConfig = {
   },
 };
 
-const calculateCost = (kwh) => {
-  let cost;
-  if (kwh <= 50) cost = kwh * 0.58;
-  else if (kwh <= 100) cost = 50 * 0.58 + (kwh - 50) * 0.68;
-  else if (kwh <= 200) cost = 50 * 0.58 + 50 * 0.68 + (kwh - 100) * 0.83;
-  else if (kwh <= 350) {
-    cost = 50 * 0.58 + 50 * 0.68 + 100 * 0.83 + (kwh - 200) * 1.25;
-  } else if (kwh <= 650) {
-    cost =
-      50 * 0.58 +
-      50 * 0.68 +
-      100 * 0.83 +
-      150 * 1.25 +
-      (kwh - 350) * 1.4;
-  } else if (kwh <= 1000) {
-    cost =
-      50 * 0.58 +
-      50 * 0.68 +
-      100 * 0.83 +
-      150 * 1.25 +
-      300 * 1.4 +
-      (kwh - 650) * 1.5;
-  } else {
-    cost =
-      50 * 0.58 +
-      50 * 0.68 +
-      100 * 0.83 +
-      150 * 1.25 +
-      300 * 1.4 +
-      350 * 1.5 +
-      (kwh - 1000) * 1.65;
-  }
-  return 1 + cost;
-};
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -112,9 +79,11 @@ const processWeeklyData = (readings) => {
     setLastWeekLabels(['Today']);
     return;
   }
+
   const last7 = days.slice(-7);
   const prev7 = days.slice(-14, -7);
 
+  // Labels from real day names, rightmost = Today
   const labels = last7.map((d, i) =>
     i === last7.length - 1 ? 'Today' : DAY_LABELS[d.dayIndex]
   );
@@ -132,6 +101,7 @@ const processMonthlyData = (readings) => {
     return;
   }
 
+  // Group daily consumptions by calendar month
   const byMonth = {};
   days.forEach(d => {
     const [y, m] = d.dateKey.split('-');
@@ -140,6 +110,7 @@ const processMonthlyData = (readings) => {
     byMonth[key] += d.kwh;
   });
 
+  // Sort newest first and build result
   const result = Object.keys(byMonth).sort().reverse().slice(0, 6).map(key => {
     const [y, m] = key.split('-').map(Number);
     const label = new Date(y, m - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
@@ -171,8 +142,8 @@ useEffect(() => {
 
   const weekTotalKwh = lastWeekKwh.reduce((a, b) => a + b, 0);
   const previousWeekTotalKwh = previousWeekKwh.reduce((a, b) => a + b, 0);
-  const weekTotalCost = calculateCost(weekTotalKwh);
-
+  const weekTotalCost = calculateEgyptBill(weekTotalKwh).totalCost;
+  // FIX: divide by actual days with data, not always 7
   const daysWithData = lastWeekKwh.filter(v => v > 0).length || 1;
   const weekAvgKwh = weekTotalKwh / daysWithData;
   const weekMaxKwh = Math.max(...lastWeekKwh);
@@ -184,7 +155,7 @@ useEffect(() => {
       : ((weekTotalKwh - previousWeekTotalKwh) / previousWeekTotalKwh) * 100;
 
   const projectedMonthlyKwh = Math.round(weekAvgKwh * 30);
-  const projectedMonthlyCost = calculateCost(projectedMonthlyKwh);
+  const projectedMonthlyCost = calculateEgyptBill(projectedMonthlyKwh).totalCost;
 
   const trendText =
     weeklyChangePercent > 0
@@ -342,7 +313,7 @@ useEffect(() => {
             <Text style={styles.monthlyEmpty}>No historical data available yet.</Text>
           ) : (
             monthlyHistory.map((item, index) => {
-              const cost = calculateCost(item.kwh);
+              const cost = calculateEgyptBill(item.kwh).totalCost;
               const isLast = index === monthlyHistory.length - 1;
               return (
                 <View key={index} style={[styles.monthlyRow, isLast && styles.monthlyRowLast]}>
