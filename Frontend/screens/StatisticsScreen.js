@@ -42,12 +42,12 @@ const [lastWeekLabels, setLastWeekLabels] = useState(['D-6','D-5','D-4','D-3','D
 const [previousWeekKwh, setPreviousWeekKwh] = useState([0,0,0,0,0,0,0]);
 const [monthlyHistory, setMonthlyHistory] = useState([]);
 const [isLoading, setIsLoading] = useState(true);
-
+// Groups logs by calendar day and returns sorted array of dateKey, kwh, dayIndex, ts
 const buildDailyConsumption = (readings) => {
   const sorted = [...readings]
     .filter(r => r.ts != null && r.energy_kwh != null)
     .sort((a, b) => a.ts - b.ts);
-
+// Group by calendar date key YYYY-MM-DD
   const byDay = {};
   sorted.forEach(r => {
     const d = new Date(r.ts * 1000);
@@ -55,10 +55,10 @@ const buildDailyConsumption = (readings) => {
     if (!byDay[key]) byDay[key] = [];
     byDay[key].push(r);
   });
-
+// Each day = last log of day - first log of day
   return Object.keys(byDay).sort().map(key => {
     const logs = byDay[key];
-
+// Last reading of the day - last reading of the previous day
 const previousDayLastReading =
   sorted.findLast(r => r.ts < logs[0].ts)?.energy_kwh ?? logs[0].energy_kwh;
 
@@ -79,11 +79,11 @@ const processWeeklyData = (readings) => {
     setLastWeekLabels(['Today']);
     return;
   }
-
+// Last 7 days = this week 7 before that = previous week
   const last7 = days.slice(-7);
   const prev7 = days.slice(-14, -7);
 
-  // Labels from real day names, rightmost = Today
+  // Labels from real day names
   const labels = last7.map((d, i) =>
     i === last7.length - 1 ? 'Today' : DAY_LABELS[d.dayIndex]
   );
