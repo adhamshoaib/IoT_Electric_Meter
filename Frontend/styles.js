@@ -550,6 +550,46 @@ signUpText: {
     color: '#64748b',
     lineHeight: 18,
   },
+  profileInfoRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 18,
+  borderBottomWidth: 1,
+  borderBottomColor: '#f1f5f9',
+},
+
+profileInfoRowLast: {
+  borderBottomWidth: 0,
+},
+
+profileInfoIconBox: {
+  width: 54,
+  height: 54,
+  borderRadius: 20,
+  backgroundColor: '#ecfdf5',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginRight: 16,
+},
+
+profileInfoContent: {
+  flex: 1,
+},
+
+profileInfoLabel: {
+  fontSize: 12,
+  fontWeight: '900',
+  color: '#94a3b8',
+  letterSpacing: 1,
+  textTransform: 'uppercase',
+  marginBottom: 6,
+},
+
+profileInfoValue: {
+  fontSize: 18,
+  fontWeight: '900',
+  color: '#0f172a',
+},
 
   profileHero: {
     backgroundColor: '#ffffff',
