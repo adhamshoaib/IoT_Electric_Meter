@@ -11,7 +11,8 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import styles from '../../styles';
 
-const SAVED_CARD_KEY = 'smart_meter_saved_card';
+const SAVED_CARDS_KEY = 'smart_meter_saved_cards';
+
 export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
   const [amount, setAmount] = useState('');
   const [cardHolder, setCardHolder] = useState('');
@@ -21,37 +22,56 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
   const [status, setStatus] = useState('idle');
   const [message, setMessage] = useState('');
 
-  const [savedCard, setSavedCard] = useState(null);
-  const [useSavedCard, setUseSavedCard] = useState(false);
+  const [savedCards, setSavedCards] = useState([]);
+  const [selectedCardId, setSelectedCardId] = useState(null);
+  const [isAddingNewCard, setIsAddingNewCard] = useState(false);
   const [rememberCard, setRememberCard] = useState(true);
 
   useEffect(() => {
-    loadSavedCard();
+    loadSavedCards();
   }, []);
 
-  const loadSavedCard = async () => {
+  const loadSavedCards = async () => {
     try {
-      const storedCard = await AsyncStorage.getItem(SAVED_CARD_KEY);
+      const storedCards = await AsyncStorage.getItem(SAVED_CARDS_KEY);
 
-      if (storedCard) {
-        const parsedCard = JSON.parse(storedCard);
-        setSavedCard(parsedCard);
-        setUseSavedCard(true);
+      if (storedCards) {
+        const parsedCards = JSON.parse(storedCards);
+        setSavedCards(parsedCards);
+
+        if (parsedCards.length > 0) {
+          setSelectedCardId(parsedCards[0].id);
+          setIsAddingNewCard(false);
+        }
+      } else {
+        setIsAddingNewCard(true);
       }
     } catch (error) {
-      console.log('Error loading saved card:', error);
+      console.log('Error loading saved cards:', error);
+      setIsAddingNewCard(true);
     }
   };
 
-  const removeSavedCard = async () => {
-    try {
-      await AsyncStorage.removeItem(SAVED_CARD_KEY);
-      setSavedCard(null);
-      setUseSavedCard(false);
-      setMessage('Saved card removed.');
-    } catch (error) {
-      setMessage('Could not remove saved card.');
+  const saveCards = async (cards) => {
+    await AsyncStorage.setItem(SAVED_CARDS_KEY, JSON.stringify(cards));
+    setSavedCards(cards);
+  };
+
+  const removeSavedCard = async (cardId) => {
+    const updatedCards = savedCards.filter((card) => card.id !== cardId);
+
+    await saveCards(updatedCards);
+
+    if (selectedCardId === cardId) {
+      if (updatedCards.length > 0) {
+        setSelectedCardId(updatedCards[0].id);
+      } else {
+        setSelectedCardId(null);
+        setIsAddingNewCard(true);
+      }
     }
+
+    setMessage('Saved card removed.');
   };
 
   const getCardBrand = (number) => {
@@ -63,74 +83,25 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
     return 'Bank Card';
   };
 
-  const saveCardLocally = async () => {
+  const saveNewCardLocally = async () => {
     const cleanNumber = cardNumber.replace(/\s/g, '');
     const last4 = cleanNumber.slice(-4);
 
-    const cardToSave = {
+    const newCard = {
+      id: `${Date.now()}`,
       holder: cardHolder.trim(),
       last4,
       expiry: expiryDate.trim(),
       brand: getCardBrand(cleanNumber),
     };
 
-    await AsyncStorage.setItem(SAVED_CARD_KEY, JSON.stringify(cardToSave));
-    setSavedCard(cardToSave);
-    setUseSavedCard(true);
-  };
+    const updatedCards = [newCard, ...savedCards];
 
-  const handlePay = async () => {
-    const topUpAmount = Number(amount);
+    await saveCards(updatedCards);
+    setSelectedCardId(newCard.id);
+    setIsAddingNewCard(false);
 
-    if (!topUpAmount || topUpAmount <= 0) {
-      setMessage('Please enter a valid top-up amount.');
-      return;
-    }
-
-   if (useSavedCard && savedCard) {
-  setStatus('processing');
-  setMessage('Processing payment...');
-
-  setTimeout(() => {
-    onPaymentSuccess?.(topUpAmount, 'Bank Card');
-
-    setStatus('success');
-    setMessage(`Payment successful. ${topUpAmount.toFixed(2)} EGP added to your balance.`);
-  }, 1800);
-
-  return;
-}
-    if (!cardHolder.trim()) {
-      setMessage('Please enter the card holder name.');
-      return;
-    }
-
-    if (cardNumber.replace(/\s/g, '').length < 16) {
-      setMessage('Please enter a valid card number.');
-      return;
-    }
-
-    if (!expiryDate.trim()) {
-      setMessage('Please enter the expiry date.');
-      return;
-    }
-
-    if (cvv.length < 3) {
-      setMessage('Please enter a valid CVV.');
-      return;
-    }
-
-    setStatus('processing');
-    setMessage('Processing payment...');
-
-    setTimeout(async () => {
-      if (rememberCard) {
-        await saveCardLocally();
-      }
-  onPaymentSuccess?.(topUpAmount, 'Bank Card');
-      setStatus('success');
-      setMessage(`Payment successful. ${topUpAmount.toFixed(2)} EGP added to your balance.`);
-    }, 1800);
+    return newCard;
   };
 
   const formatCardNumber = (text) => {
@@ -148,6 +119,95 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
     return `${numbersOnly.slice(0, 2)}/${numbersOnly.slice(2, 4)}`;
   };
 
+  const clearNewCardFields = () => {
+    setCardHolder('');
+    setCardNumber('');
+    setExpiryDate('');
+    setCvv('');
+    setRememberCard(true);
+  };
+
+  const validateAmount = () => {
+    const topUpAmount = Number(amount);
+
+    if (!topUpAmount || topUpAmount <= 0) {
+      setMessage('Please enter a valid top-up amount.');
+      return null;
+    }
+
+    return topUpAmount;
+  };
+
+  const validateNewCard = () => {
+    if (!cardHolder.trim()) {
+      setMessage('Please enter the card holder name.');
+      return false;
+    }
+
+    if (cardNumber.replace(/\s/g, '').length < 16) {
+      setMessage('Please enter a valid card number.');
+      return false;
+    }
+
+    if (!expiryDate.trim()) {
+      setMessage('Please enter the expiry date.');
+      return false;
+    }
+
+    if (cvv.length < 3) {
+      setMessage('Please enter a valid CVV.');
+      return false;
+    }
+
+    return true;
+  };
+
+  const completePayment = (topUpAmount) => {
+    setStatus('processing');
+    setMessage('Processing payment...');
+
+    setTimeout(() => {
+      onPaymentSuccess?.(topUpAmount, 'Bank Card');
+
+      setStatus('success');
+      setMessage(
+        `Payment successful. ${topUpAmount.toFixed(2)} EGP added to your balance.`
+      );
+    }, 1800);
+  };
+
+  const handlePay = async () => {
+    const topUpAmount = validateAmount();
+    if (!topUpAmount) return;
+
+    if (!isAddingNewCard && selectedCardId) {
+      completePayment(topUpAmount);
+      return;
+    }
+
+    if (!validateNewCard()) return;
+
+    setStatus('processing');
+    setMessage('Processing payment...');
+
+    setTimeout(async () => {
+      if (rememberCard) {
+        await saveNewCardLocally();
+      }
+
+      onPaymentSuccess?.(topUpAmount, 'Bank Card');
+
+      setStatus('success');
+      setMessage(
+        `Payment successful. ${topUpAmount.toFixed(2)} EGP added to your balance.`
+      );
+
+      clearNewCardFields();
+    }, 1800);
+  };
+
+  const selectedCard = savedCards.find((card) => card.id === selectedCardId);
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.paymentPageContent}>
@@ -157,12 +217,12 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
 
         <View style={styles.cardVisual}>
           <Text style={styles.cardVisualLabel}>
-            {useSavedCard && savedCard ? savedCard.brand : 'Smart Meter Card'}
+            {!isAddingNewCard && selectedCard ? selectedCard.brand : 'Smart Meter Card'}
           </Text>
 
           <Text style={styles.cardVisualNumber}>
-            {useSavedCard && savedCard
-              ? `•••• •••• •••• ${savedCard.last4}`
+            {!isAddingNewCard && selectedCard
+              ? `•••• •••• •••• ${selectedCard.last4}`
               : cardNumber || '4242 4242 4242 4242'}
           </Text>
 
@@ -170,8 +230,8 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
             <View>
               <Text style={styles.cardVisualSmallLabel}>Card Holder</Text>
               <Text style={styles.cardVisualValue}>
-                {useSavedCard && savedCard
-                  ? savedCard.holder
+                {!isAddingNewCard && selectedCard
+                  ? selectedCard.holder
                   : cardHolder || 'YOUR NAME'}
               </Text>
             </View>
@@ -179,8 +239,8 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
             <View>
               <Text style={styles.cardVisualSmallLabel}>Expires</Text>
               <Text style={styles.cardVisualValue}>
-                {useSavedCard && savedCard
-                  ? savedCard.expiry
+                {!isAddingNewCard && selectedCard
+                  ? selectedCard.expiry
                   : expiryDate || '12/28'}
               </Text>
             </View>
@@ -190,23 +250,70 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
         <View style={styles.paymentFormCard}>
           <Text style={styles.paymentPageTitle}>Bank Card Payment</Text>
           <Text style={styles.paymentPageSubtitle}>
-            Enter your card details to complete the top-up.
+            Select a saved card or add a new card to complete the top-up.
           </Text>
 
-          {savedCard && useSavedCard && (
-            <View style={styles.savedCardBox}>
-              <View>
-                <Text style={styles.savedCardTitle}>
-                  {savedCard.brand} •••• {savedCard.last4}
-                </Text>
-                <Text style={styles.savedCardSubtitle}>
-                  {savedCard.holder} · Expires {savedCard.expiry}
-                </Text>
+          {savedCards.length > 0 && (
+            <View style={styles.savedCardsSection}>
+              <View style={styles.savedCardsHeader}>
+                <Text style={styles.savedCardsTitle}>Saved Cards</Text>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setIsAddingNewCard(true);
+                    setSelectedCardId(null);
+                    setMessage('');
+                  }}
+                >
+                  <Text style={styles.addNewCardText}>Add New</Text>
+                </TouchableOpacity>
               </View>
 
-              <TouchableOpacity onPress={() => setUseSavedCard(false)}>
-                <Text style={styles.changeCardText}>Change</Text>
-              </TouchableOpacity>
+              {savedCards.map((card) => {
+                const isSelected = selectedCardId === card.id && !isAddingNewCard;
+
+                return (
+                  <TouchableOpacity
+                    key={card.id}
+                    style={[
+                      styles.savedCardOption,
+                      isSelected && styles.savedCardOptionActive,
+                    ]}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      setSelectedCardId(card.id);
+                      setIsAddingNewCard(false);
+                      setMessage('');
+                    }}
+                  >
+                    <View style={styles.savedCardOptionLeft}>
+                      <View
+                        style={[
+                          styles.savedCardRadio,
+                          isSelected && styles.savedCardRadioActive,
+                        ]}
+                      >
+                        {isSelected && (
+                          <Ionicons name="checkmark" size={13} color="#ffffff" />
+                        )}
+                      </View>
+
+                      <View>
+                        <Text style={styles.savedCardTitle}>
+                          {card.brand} •••• {card.last4}
+                        </Text>
+                        <Text style={styles.savedCardSubtitle}>
+                          {card.holder} · Expires {card.expiry}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <TouchableOpacity onPress={() => removeSavedCard(card.id)}>
+                      <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
 
@@ -220,14 +327,14 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
             placeholderTextColor="#94a3b8"
           />
 
-          {(!savedCard || !useSavedCard) && (
+          {(isAddingNewCard || savedCards.length === 0) && (
             <>
               <Text style={styles.inputLabel}>Card Holder Name</Text>
               <TextInput
                 style={styles.input}
                 value={cardHolder}
                 onChangeText={setCardHolder}
-                placeholder="Mohannad Hany"
+                placeholder="Card holder name"
                 placeholderTextColor="#94a3b8"
               />
 
@@ -291,9 +398,23 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
                 </View>
 
                 <Text style={styles.rememberCardText}>
-                  Remember this card for future payments
+                  Save this card for future payments
                 </Text>
               </TouchableOpacity>
+
+              {savedCards.length > 0 && (
+                <TouchableOpacity
+                  style={styles.cancelNewCardButton}
+                  onPress={() => {
+                    setIsAddingNewCard(false);
+                    setSelectedCardId(savedCards[0]?.id ?? null);
+                    clearNewCardFields();
+                    setMessage('');
+                  }}
+                >
+                  <Text style={styles.cancelNewCardText}>Cancel</Text>
+                </TouchableOpacity>
+              )}
             </>
           )}
 
@@ -309,15 +430,6 @@ export default function BankCardPaymentPage({ onBack, onPaymentSuccess }) {
               {status === 'processing' ? 'Processing...' : 'Pay Now'}
             </Text>
           </TouchableOpacity>
-
-          {savedCard && (
-            <TouchableOpacity
-              style={styles.removeSavedCardButton}
-              onPress={removeSavedCard}
-            >
-              <Text style={styles.removeSavedCardText}>Remove saved card</Text>
-            </TouchableOpacity>
-          )}
 
           {!!message && (
             <Text

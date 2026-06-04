@@ -1410,5 +1410,78 @@ meterStatusSubtitle: {
   fontWeight: '600',
   color: '#64748b',
 },
+savedCardsSection: {
+  marginTop: 16,
+  marginBottom: 8,
+},
+
+savedCardsHeader: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 10,
+},
+
+savedCardsTitle: {
+  fontSize: 14,
+  fontWeight: '900',
+  color: '#0f172a',
+},
+
+addNewCardText: {
+  fontSize: 13,
+  fontWeight: '900',
+  color: '#0f766e',
+},
+
+savedCardOption: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  padding: 14,
+  borderRadius: 18,
+  borderWidth: 1,
+  borderColor: '#e2e8f0',
+  backgroundColor: '#f8fafc',
+  marginBottom: 10,
+},
+
+savedCardOptionActive: {
+  backgroundColor: '#f0fdfa',
+  borderColor: '#99f6e4',
+},
+
+savedCardOptionLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flex: 1,
+},
+
+savedCardRadio: {
+  width: 24,
+  height: 24,
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: '#94a3b8',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginRight: 12,
+},
+
+savedCardRadioActive: {
+  backgroundColor: '#0f766e',
+  borderColor: '#0f766e',
+},
+
+cancelNewCardButton: {
+  marginTop: 12,
+  alignItems: 'center',
+},
+
+cancelNewCardText: {
+  fontSize: 13,
+  fontWeight: '900',
+  color: '#64748b',
+},
 });
 export default styles;
