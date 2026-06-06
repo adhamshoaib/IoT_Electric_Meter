@@ -6,6 +6,7 @@
 #include "wifi_sta.h"
 #include "led_driver.h"
 #include "cloud_sync.h"
+#include "gsm_driver.h"
 
 #include <stdio.h>
 #include "nvs_flash.h"
@@ -34,6 +35,7 @@
 #define LOAD_LED_GPIO GPIO_NUM_18
 #define WIFI_LED_GPIO GPIO_NUM_19
 #define CLOUD_LED_GPIO GPIO_NUM_23
+#define GSM_LED_GPIO GPIO_NUM_27
 
 static const char *TAG = "MAIN";
 
@@ -140,6 +142,20 @@ void app_main(void)
 
     ESP_LOGI(TAG, "BL0939 meter started (UART%d TX=%d RX=%d ADDR=%u)",
              BL0939_UART_PORT, BL0939_UART_TX_PIN, BL0939_UART_RX_PIN, (unsigned)BL0939_DEVICE_ADDRESS);
+
+    gsm_err_t gsm_ret = gsm_init();
+    if (gsm_ret == GSM_OK)
+    {
+        ESP_LOGI(TAG, "SIM800 initialised");
+        gsm_ret = gsm_wait_for_registration(60000);
+        if (gsm_ret != GSM_OK)
+            ESP_LOGW(TAG, "GSM registration failed: %s", gsm_err_to_str(gsm_ret));
+    }
+    else
+    {
+        ESP_LOGW(TAG, "GSM init failed: %s", gsm_err_to_str(gsm_ret));
+    }
+
     ret = i2c_service_init(OLED_I2C_PORT, OLED_I2C_SDA, OLED_I2C_SCL, OLED_I2C_CLK_HZ);
     if (ret != ESP_OK)
     {
@@ -164,8 +180,14 @@ void app_main(void)
         }
     }
 
-    wifi_wait_connected();
-    ESP_LOGI(TAG, "WiFi connected");
+    if (wifi_is_connected())
+    {
+        ESP_LOGI(TAG, "WiFi already connected");
+    }
+    else
+    {
+        ESP_LOGW(TAG, "WiFi not connected — cloud sync will use GSM fallback");
+    }
 
     ret = cloud_sync_init();
     if (ret != ESP_OK)
@@ -195,6 +217,10 @@ void app_main(void)
     led_t cloud_led = {.pin = CLOUD_LED_GPIO};
     ESP_ERROR_CHECK(led_init(&cloud_led));
     led_off(&cloud_led);
+
+    led_t gsm_led = {.pin = GSM_LED_GPIO};
+    ESP_ERROR_CHECK(led_init(&gsm_led));
+    led_off(&gsm_led);
 
     uint32_t display_tick = 0;
     uint32_t last_upload_count = 0;
@@ -239,6 +265,17 @@ void app_main(void)
             cloud_blink_until = 0;
         }
 
+        if (cloud_sync_is_gsm_mode())
+        {
+            if (gsm_led.mode != LED_MODE_ON)
+                led_on(&gsm_led);
+        }
+        else
+        {
+            if (gsm_led.mode != LED_MODE_OFF)
+                led_off(&gsm_led);
+        }
+
         if (display_tick == 0U)
         {
             energy_metering_data_t m;
@@ -247,9 +284,12 @@ void app_main(void)
             if (ret == ESP_OK)
             {
                 ESP_LOGI(TAG,
-                         "Voltage: %.2f V | Current: %.3f A | Energy: %.6f kWh | Elapsed: %u s",
+                         "V: %.1f V | I: %.3f A | P: %.1f W | S: %.1f VA | PF: %.3f | E: %.6f kWh | %u s",
                          m.voltage_v,
                          m.current_a,
+                         m.active_power_w,
+                         m.apparent_power_va,
+                         m.power_factor,
                          m.total_energy_kwh,
                          (unsigned)elapsed_s);
 

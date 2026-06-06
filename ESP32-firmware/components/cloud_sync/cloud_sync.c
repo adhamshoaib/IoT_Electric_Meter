@@ -9,10 +9,17 @@
 
 #include "http_client.h"
 #include "wifi_sta.h"
+#include "esp_netif.h"
 #include "energy_metering.h"
+#include "gsm_driver.h"
+#include "gsm_ppp.h"
 
 #include <stdatomic.h>
 #include <time.h>
+#include "nvs_flash.h"
+
+#define CLOUD_SYNC_NVS_NS  "cloud_sync"
+#define CLOUD_SYNC_NVS_TS  "last_ts"
 
 static const char *TAG = "CLOUD_SYNC";
 
@@ -23,11 +30,10 @@ static atomic_bool s_time_synced = false;
 static atomic_bool s_task_running = false;
 static atomic_bool s_stop_requested = false;
 static atomic_uint s_upload_count = 0;
+static atomic_bool s_gsm_mode = false;
 
 static uint32_t s_upload_interval_ms = CLOUD_SYNC_DEFAULT_INTERVAL_MS;
 static uint32_t s_retry_delay_ms = CLOUD_SYNC_DEFAULT_RETRY_MS;
-
-
 
 static void time_sync_notification_cb(struct timeval *tv)
 {
@@ -86,13 +92,61 @@ static time_t cloud_sync_get_timestamp(void)
     time_t now = 0;
     time(&now);
 
-    if (now < 946684800)
-    {
-        atomic_store(&s_time_synced, false);
+    if (now >= 946684800)
+        return now;
+
+    atomic_store(&s_time_synced, false);
+
+    nvs_handle_t nvs;
+    if (nvs_open(CLOUD_SYNC_NVS_NS, NVS_READONLY, &nvs) != ESP_OK)
         return 0;
+
+    int64_t saved_ts = 0;
+    esp_err_t err = nvs_get_i64(nvs, CLOUD_SYNC_NVS_TS, &saved_ts);
+    nvs_close(nvs);
+
+    if (err != ESP_OK || saved_ts <= 0)
+        return 0;
+
+    uint32_t uptime_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    return (time_t)(saved_ts + (uptime_ms / 1000));
+}
+
+static esp_err_t cloud_sync_upload_via_gsm(time_t ts, float energy_kwh)
+{
+    gsm_gprs_config_t gprs_cfg = {
+        .apn = CONFIG_CLOUD_SYNC_GSM_APN,
+        .user = CONFIG_CLOUD_SYNC_GSM_USER,
+        .pass = CONFIG_CLOUD_SYNC_GSM_PASS,
+    };
+
+    /* Start PPP session — this gives us a working IP stack over GSM */
+    esp_err_t ret = gsm_ppp_start(&gprs_cfg, 60000);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "PPP start failed: %s", esp_err_to_name(ret));
+        return ESP_FAIL;
     }
 
-    return now;
+    /* firebase_post uses esp_http_client which works over any active
+     * lwIP netif — PPP is now the default route, so this succeeds. */
+    ret = firebase_post(ts, energy_kwh);
+
+    /* Always stop PPP when done */
+    gsm_ppp_stop();
+
+    /* If WiFi reconnected during the PPP session, restore it as default */
+    if (wifi_is_connected())
+    {
+        esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (sta)
+        {
+            esp_netif_set_default_netif(sta);
+            ESP_LOGI(TAG, "Restored WiFi as default netif");
+        }
+    }
+
+    return ret;
 }
 
 static void cloud_sync_task_entry(void *arg)
@@ -105,18 +159,27 @@ static void cloud_sync_task_entry(void *arg)
     {
         const uint32_t sleep_ms = atomic_load(&s_stop_requested) ? 100 : s_upload_interval_ms;
 
-        if (!wifi_is_connected())
+        bool wifi_ok = wifi_is_connected();
+
+        if (!wifi_ok && !atomic_load(&s_gsm_mode))
         {
-            ESP_LOGD(TAG, "WiFi not connected, skipping upload");
-            vTaskDelay(pdMS_TO_TICKS(sleep_ms));
-            continue;
+            atomic_store(&s_gsm_mode, true);
+            ESP_LOGI(TAG, "WiFi not connected — switching to GSM fallback");
+        }
+        else if (wifi_ok && atomic_load(&s_gsm_mode))
+        {
+            atomic_store(&s_gsm_mode, false);
+            ESP_LOGI(TAG, "WiFi reconnected — switching back from GSM");
         }
 
         if (!atomic_load(&s_time_synced))
         {
-            ESP_LOGI(TAG, "Time not synchronized, attempting sync");
-            (void)cloud_sync_obtain_time();
-            if (!atomic_load(&s_time_synced))
+            if (wifi_ok)
+            {
+                ESP_LOGI(TAG, "Time not synchronized, attempting sync");
+                (void)cloud_sync_obtain_time();
+            }
+            if (!atomic_load(&s_time_synced) && !atomic_load(&s_gsm_mode))
             {
                 vTaskDelay(pdMS_TO_TICKS(s_retry_delay_ms));
                 continue;
@@ -133,20 +196,35 @@ static void cloud_sync_task_entry(void *arg)
         }
 
         time_t ts = cloud_sync_get_timestamp();
-        if (ts == 0)
+        if (ts == 0 && !atomic_load(&s_gsm_mode))
         {
             ESP_LOGW(TAG, "Invalid timestamp, skipping upload");
             vTaskDelay(pdMS_TO_TICKS(s_retry_delay_ms));
             continue;
         }
 
-        ESP_LOGI(TAG, "Uploading: ts=%lld, energy=%.6f kWh",
-                 (long long)ts, data.total_energy_kwh);
+        if (wifi_ok)
+        {
+            ret = firebase_post(ts, data.total_energy_kwh);
+        }
+        else
+        {
+            ret = cloud_sync_upload_via_gsm(ts, data.total_energy_kwh);
+        }
 
-        ret = firebase_post(ts, data.total_energy_kwh);
         if (ret == ESP_OK)
         {
             ESP_LOGI(TAG, "Upload successful");
+            if (ts > 946684800)
+            {
+                nvs_handle_t nvs;
+                if (nvs_open(CLOUD_SYNC_NVS_NS, NVS_READWRITE, &nvs) == ESP_OK)
+                {
+                    nvs_set_i64(nvs, CLOUD_SYNC_NVS_TS, (int64_t)ts);
+                    nvs_commit(nvs);
+                    nvs_close(nvs);
+                }
+            }
             atomic_fetch_add(&s_upload_count, 1);
             vTaskDelay(pdMS_TO_TICKS(sleep_ms));
         }
@@ -276,6 +354,11 @@ esp_err_t cloud_sync_stop_task(void)
 
     ESP_LOGI(TAG, "Cloud sync task stopped");
     return ESP_OK;
+}
+
+bool cloud_sync_is_gsm_mode(void)
+{
+    return atomic_load(&s_gsm_mode);
 }
 
 bool cloud_sync_is_time_synced(void)

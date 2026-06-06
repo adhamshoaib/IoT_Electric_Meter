@@ -22,16 +22,12 @@
 #define GSM_TIMEOUT_SHORT 3000  /**< Quick commands (AT, echo off) */
 #define GSM_TIMEOUT_MEDIUM 5000 /**< Registration, CREG queries    */
 #define GSM_TIMEOUT_LONG 15000  /**< SMS send, call setup          */
-#define GSM_TIMEOUT_HTTP 60000  /**< HTTP GET/POST                 */
-#define GSM_TIMEOUT_GPRS 20000  /**< GPRS attach / context open    */
 
 /* ────────────────────────── Buffer Sizes ───────────────────────────────── */
 
 #define GSM_AT_BUF_SIZE 512    /**< AT command / response buffer  */
 #define GSM_SMS_TEXT_MAX 160   /**< Maximum SMS body length       */
 #define GSM_PHONE_NUM_MAX 20   /**< E.164 phone-number length     */
-#define GSM_HTTP_URL_MAX 256   /**< Maximum URL length            */
-#define GSM_HTTP_RESP_MAX 1024 /**< Maximum HTTP response buffer  */
 #define GSM_UART_RX_BUF_SIZE 1024 /**< UART RX ring buffer size   */
 #define GSM_UART_TX_BUF_SIZE 256  /**< UART TX ring buffer size   */
 
@@ -86,15 +82,6 @@ typedef struct
     const char *pass; /**< APN password  (NULL if none)                */
 } gsm_gprs_config_t;
 
-/* ─────────────────────────── HTTP Response ─────────────────────────────── */
-
-typedef struct
-{
-    int status_code;              /**< HTTP status, e.g. 200           */
-    int data_len;                 /**< Bytes in body                   */
-    char body[GSM_HTTP_RESP_MAX]; /**< Response body (null-terminated) */
-} gsm_http_response_t;
-
 /* ═══════════════════════════════════════════════════════════════════════════
  *  PUBLIC API
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -137,6 +124,14 @@ gsm_err_t gsm_send_at(const char *cmd,
                       char *resp_buf,
                       size_t buf_size,
                       uint32_t timeout_ms);
+
+/**
+ * @brief  Send a command and check that the response contains "OK".
+ * @param[in]  cmd        NULL-terminated AT string.
+ * @param[in]  timeout_ms Wait time in milliseconds.
+ * @return GSM_OK or negative error code.
+ */
+gsm_err_t gsm_cmd_ok(const char *cmd, uint32_t timeout_ms);
 
 /* ── Module Info ───────────────────────────────────────────────────────── */
 
@@ -195,53 +190,6 @@ gsm_err_t gsm_call_dial(const char *phone_number);
  * @return GSM_OK or negative error code.
  */
 gsm_err_t gsm_call_hangup(void);
-
-/* ── GPRS ──────────────────────────────────────────────────────────────── */
-
-/**
- * @brief  Attach GPRS bearer with the given APN credentials.
- * @param[in]  config  APN, username, and password.
- * @return GSM_OK on success or negative error code.
- */
-gsm_err_t gsm_gprs_connect(const gsm_gprs_config_t *config);
-
-/**
- * @brief  Detach the GPRS bearer and close the PDP context.
- * @return GSM_OK or negative error code.
- */
-gsm_err_t gsm_gprs_disconnect(void);
-
-/**
- * @brief  Return true when GPRS is attached and a local IP is assigned.
- */
-bool gsm_gprs_is_connected(void);
-
-/* ── HTTP ──────────────────────────────────────────────────────────────── */
-
-/**
- * @brief  Perform an HTTP GET request.
- * @param[in]  url       Full URL including scheme, e.g. "http://api.example.com/data".
- * @param[out] response  Caller-allocated response structure.
- * @return GSM_OK, GSM_ERR_HTTP, or GSM_ERR_TIMEOUT.
- */
-gsm_err_t gsm_http_get(const char *url, gsm_http_response_t *response);
-
-/**
- * @brief  Perform an HTTP POST request.
- * @param[in]  url          Full URL.
- * @param[in]  body         POST body string.
- * @param[in]  body_len     Length of body in bytes.
- * @param[in]  content_type Content-Type value (NULL defaults to "application/x-www-form-urlencoded").
- * @param[in]  headers      Extra headers in "Key1: Val1\r\nKey2: Val2"  (NULL if none).
- * @param[out] response     Caller-allocated response structure.
- * @return GSM_OK, GSM_ERR_HTTP, or GSM_ERR_TIMEOUT.
- */
-gsm_err_t gsm_http_post(const char *url,
-                        const char *body,
-                        size_t body_len,
-                        const char *content_type,
-                        const char *headers,
-                        gsm_http_response_t *response);
 
 /* ── Utility ───────────────────────────────────────────────────────────── */
 

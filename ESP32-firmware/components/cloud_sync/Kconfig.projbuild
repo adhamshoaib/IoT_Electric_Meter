@@ -20,9 +20,9 @@ menu "Cloud Sync Configuration"
 
     config CLOUD_SYNC_TASK_STACK_SIZE
         int "Cloud sync task stack size in bytes"
-        default 8192
+        default 16384
         help
-            Stack size for the cloud sync task.
+            Stack size for the cloud sync task (increased for TCP socket buffers).
 
     config CLOUD_SYNC_NTP_SERVER_1
         string "Primary NTP server"
@@ -35,5 +35,23 @@ menu "Cloud Sync Configuration"
         default "time.nist.gov"
         help
             Secondary NTP server for time synchronization.
+
+    config CLOUD_SYNC_GSM_APN
+        string "GSM APN for fallback data"
+        default "internet"
+        help
+            APN name for GPRS data connection when using GSM as WiFi fallback.
+
+    config CLOUD_SYNC_GSM_USER
+        string "GSM APN username (optional)"
+        default ""
+        help
+            APN username if required by the mobile network operator.
+
+    config CLOUD_SYNC_GSM_PASS
+        string "GSM APN password (optional)"
+        default ""
+        help
+            APN password if required by the mobile network operator.
 
 endmenu

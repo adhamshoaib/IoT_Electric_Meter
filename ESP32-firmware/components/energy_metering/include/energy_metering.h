@@ -30,6 +30,10 @@ typedef struct
     /* Energy pulse counters */
     float energy_ref;     /**< BL0939 energy reference (default 3304) */
     float cf_count_scale; /**< CF count scale factor (default 20000) */
+
+    /* Active power */
+    float power_ref;           /**< Divisor converting raw WATT register to real watts. */
+    float power_noise_floor_w; /**< Active power below this is clamped to 0 W. */
 } energy_metering_calibration_t;
 
 /** Convenience initializer - matches the constants in the original main.c. */
@@ -47,6 +51,8 @@ typedef struct
     .vp_noise_floor_mv = 0.2f,                  \
     .energy_ref = 13.5f,                        \
     .cf_count_scale = 20000.0f,                 \
+    .power_ref = 30947.0f,                      \
+    .power_noise_floor_w = 1.0f,                \
 }
 
 /** Driver configuration passed to energy_metering_init(). */
@@ -66,10 +72,13 @@ typedef struct
 /** Processed measurement ready for application use. */
 typedef struct
 {
-    float voltage_v;        /**< RMS mains voltage, volts */
-    float current_a;        /**< RMS load current, amps */
-    float total_energy_kwh; /**< Accumulated energy since init or last reset, kWh */
-    bool load_connected;    /**< True when current exceeds load_threshold_a */
+    float voltage_v;         /**< RMS mains voltage, volts */
+    float current_a;         /**< RMS load current, amps */
+    float total_energy_kwh;  /**< Accumulated energy since init or last reset, kWh */
+    float active_power_w;    /**< Instantaneous active power, watts */
+    float apparent_power_va; /**< Apparent power (V_rms * I_rms), VA */
+    float power_factor;      /**< Power factor (active / apparent), clamped [0.0, 1.0] */
+    bool load_connected;     /**< True when current exceeds load_threshold_a */
 } energy_metering_data_t;
 
 /** Dedicated background task configuration. */

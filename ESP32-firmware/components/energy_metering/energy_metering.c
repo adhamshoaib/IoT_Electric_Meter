@@ -71,6 +71,8 @@ static bool calibration_is_valid(const energy_metering_calibration_t *cal)
            (cal->ia_cal_a_per_mv > 0.0f) &&
            (cal->energy_ref > 0.0f) &&
            (cal->cf_count_scale > 0.0f) &&
+           (cal->power_ref > 0.0f) &&
+           (cal->power_noise_floor_w >= 0.0f) &&
            (cal->vac_noise_floor_v >= 0.0f) &&
            (cal->ia_noise_floor_a >= 0.0f) &&
            (cal->vp_noise_floor_mv >= 0.0f);
@@ -145,12 +147,13 @@ static float frame_energy_kwh(const bl0939_raw_data_t *raw)
     s_ctx.prev_cfa_cnt = raw->cfa_cnt;
     s_ctx.prev_cfb_cnt = raw->cfb_cnt;
 
-    const int32_t delta_total = delta_cfa + delta_cfb;
+    int32_t delta_total = delta_cfa + delta_cfb;
     if (delta_total == 0)
     {
         return 0.0f;
     }
 
+    if (delta_total < 0) delta_total = -delta_total;
     return (float)delta_total / s_ctx.energy_divisor;
 }
 
@@ -169,6 +172,25 @@ static esp_err_t energy_metering_read_locked(energy_metering_data_t *out, uint32
     data.voltage_v = vrms_raw_to_mains_v(raw.v_rms);
     data.current_a = irms_raw_to_amps(raw.ia_rms);
     data.total_energy_kwh = s_ctx.total_energy_kwh;
+
+    {
+        int32_t watt_sum = raw.a_watt + raw.b_watt;
+        if (watt_sum < 0) watt_sum = -watt_sum;
+        float raw_power = (float)watt_sum / s_ctx.cal.power_ref;
+        if (raw_power < s_ctx.cal.power_noise_floor_w) raw_power = 0.0f;
+        data.active_power_w = raw_power;
+        data.apparent_power_va = data.voltage_v * data.current_a;
+        if (data.apparent_power_va > 0.0f)
+        {
+            float pf = data.active_power_w / data.apparent_power_va;
+            if (pf > 1.0f) pf = 1.0f;
+            data.power_factor = pf;
+        }
+        else
+        {
+            data.power_factor = 0.0f;
+        }
+    }
 
     if (s_ctx.load_threshold_high > 0.0f)
     {
